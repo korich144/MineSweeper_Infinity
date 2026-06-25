@@ -17,7 +17,14 @@ MinefieldWidget::MinefieldWidget(QWidget *parent)
 void MinefieldWidget::setTheme(const QString &themeName) {
     QString path = QString(":/themes/%1.bmp").arg(themeName);
     QPixmap sheet(path);
-    if (sheet.isNull()) return;
+    if (sheet.isNull()) {
+        // fallback: try to load from file system
+        sheet.load("sprites/" + themeName + ".bmp");
+    }
+    if (sheet.isNull()) {
+        qWarning() << "Cannot load theme:" << themeName;
+        return;
+    }
 
     m_cellSprites.clear();
     for (int i = 0; i < 16; ++i) {
@@ -69,10 +76,10 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
                     for (int j = 0; j < 16; ++j) {
                         int64_t cellX = (cx << 4) + i;
                         int64_t cellY = (cy << 4) + j;
-                        if (cellX < minX || cellX > maxX || cellY < minY || cellY > maxY)
-                            continue;
+                        if (cellX < minX || cellX > maxX || cellY < minY || cellY > maxY) continue;
                         QPointF sp = cellToScreen(cellX, cellY);
-                        p.drawPixmap(sp, m_cellSprites[static_cast<int>(CellState::CLOSED)]);
+                        QRectF targetRect(sp, QSizeF(16 * m_scale, 16 * m_scale));
+                        p.drawPixmap(targetRect, m_cellSprites[static_cast<int>(CellState::CLOSED)], QRectF(0,0,16,16));
                     }
                 }
             } else {
@@ -80,10 +87,21 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
                     for (int j = 0; j < 16; ++j) {
                         int64_t cellX = (cx << 4) + i;
                         int64_t cellY = (cy << 4) + j;
-                        if (cellX < minX || cellX > maxX || cellY < minY || cellY > maxY)
-                            continue;
+                        if (cellX < minX || cellX > maxX || cellY < minY || cellY > maxY) continue;
                         CellState st = chunk->cells[i][j];
-                        p.drawPixmap(cellToScreen(cellX, cellY), m_cellSprites[static_cast<int>(st)]);
+                        QPointF sp = cellToScreen(cellX, cellY);
+                        QRectF targetRect(sp, QSizeF(16 * m_scale, 16 * m_scale));
+                        // visual feedback for pressed closed cell
+                        if (m_pressedCell.x() == cellX && m_pressedCell.y() == cellY && st == CellState::CLOSED) {
+                            // draw a bit darker (no dedicated sprite) by tinting
+                            QPixmap tinted = m_cellSprites[static_cast<int>(CellState::CLOSED)];
+                            QPainter pixp(&tinted);
+                            pixp.fillRect(tinted.rect(), QColor(0, 0, 0, 64));
+                            pixp.end();
+                            p.drawPixmap(targetRect, tinted, QRectF(0,0,16,16));
+                        } else {
+                            p.drawPixmap(targetRect, m_cellSprites[static_cast<int>(st)], QRectF(0,0,16,16));
+                        }
                     }
                 }
             }
@@ -106,6 +124,12 @@ void MinefieldWidget::mousePressEvent(QMouseEvent *event) {
         m_mightDrag = false;
         m_clickPos = event->pos();
         m_clickTimer.restart();
+        QPointF cell = screenToCell(event->pos());
+        int64_t cx = static_cast<int64_t>(qFloor(cell.x()));
+        int64_t cy = static_cast<int64_t>(qFloor(cell.y()));
+        // remember pressed cell for visual feedback
+        m_pressedCell = QPoint(cx, cy);
+        update();   // repaint to show pressed state
     } else if (event->button() == Qt::RightButton) {
         if (!m_wm || !m_wm->isGameActive()) return;
         QPointF cell = screenToCell(event->pos());
@@ -129,6 +153,10 @@ void MinefieldWidget::mousePressEvent(QMouseEvent *event) {
 
 void MinefieldWidget::mouseReleaseEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton) {
+        // clear pressed cell feedback
+        m_pressedCell = QPoint(-1, -1);
+        update();
+
         if (m_mightDrag) return;
         if (m_clickTimer.elapsed() < 300 && (event->pos() - m_clickPos).manhattanLength() < 5) {
             if (!m_wm || !m_wm->isGameActive()) return;
@@ -137,9 +165,9 @@ void MinefieldWidget::mouseReleaseEvent(QMouseEvent *event) {
             int64_t cy = static_cast<int64_t>(qFloor(cell.y()));
             CellState st = m_wm->cellStateAt(cx, cy);
             if (st == CellState::CLOSED) {
-                bool ok = m_wm->revealCell(cx, cy); // sets MINE_EXPLODED if mine
+                bool ok = m_wm->revealCell(cx, cy);
                 if (ok) {
-                    emit firstClick();   // start game timer
+                    emit firstClick();
                     emit startReveal(cx, cy);
                 }
                 update();

@@ -12,19 +12,16 @@ Saver::Saver(WorldManager *wm, const QString &worldDir, QObject *parent)
 }
 
 void Saver::onTimer() {
-    if (m_dirty) {
-        saveNow();
-        m_dirty = false;
-    }
-    // mark dirty if any regions are dirty? Actually we'll check at save time.
-    // For periodic save, we can just check if there are any dirty regions.
     if (!m_wm->dirtyRegions().empty())
-        m_dirty = true;
+        saveNow();
 }
 
 void Saver::saveNow() {
     auto dirtyRegions = m_wm->dirtyRegions();
-    if (dirtyRegions.empty()) return;
+    if (dirtyRegions.empty()) {
+        emit saveFinished();
+        return;
+    }
 
     emit showSaveIndicator();
 
@@ -38,4 +35,5 @@ void Saver::saveNow() {
         }
     }
     m_wm->clearDirtyForRegions(dirtyRegions);
+    emit saveFinished();
 }

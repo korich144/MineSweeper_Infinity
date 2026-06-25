@@ -164,27 +164,30 @@ std::shared_ptr<Chunk> WorldManager::getOrCreateChunk(int64_t cx, int64_t cy) {
 }
 
 void WorldManager::touchChunk(const ChunkCoord &coord) {
-    auto mapIt = m_lruMap.find(coord);
-    if (mapIt != m_lruMap.end())
-        m_lru.erase(*mapIt);
-    m_lru.push_front(coord);
-    m_lruMap[coord] = m_lru.begin();
+    m_lru.removeAll(coord);      // удаляем старые вхождения
+    m_lru.push_front(coord);     // вставляем в начало
 }
 
 void WorldManager::evictOneIfNeeded() {
     while (m_chunks.size() > MAX_CACHE) {
+        // ищем с конца (наименее используемый) не dirty чанк
         bool removed = false;
-        for (auto it = m_lru.rbegin(); it != m_lru.rend(); ++it) {
-            if (auto chunk = m_chunks.value(*it)) {
+        for (int i = m_lru.size() - 1; i >= 0; --i) {
+            const ChunkCoord &coord = m_lru.at(i);
+            if (auto chunk = m_chunks.value(coord)) {
                 if (!chunk->dirty) {
-                    m_chunks.remove(*it);
-                    m_lruMap.remove(*it);
-                    m_lru.erase(std::find(m_lru.begin(), m_lru.end(), *it));
+                    m_chunks.remove(coord);
+                    m_lru.removeAt(i);
                     removed = true;
                     break;
                 }
+            } else {
+                // такого чанка уже нет (был удалён) – просто убираем из lru
+                m_lru.removeAt(i);
+                removed = true;
+                break;
             }
         }
-        if (!removed) break; // all loaded chunks are dirty – can't evict
+        if (!removed) break; // все dirty или lru пуст
     }
 }

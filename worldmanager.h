@@ -58,7 +58,6 @@ private:
     mutable QReadWriteLock m_lock;
     QHash<ChunkCoord, std::shared_ptr<Chunk>> m_chunks;
     QList<ChunkCoord> m_lru;
-    QHash<ChunkCoord, QList<ChunkCoord>::iterator> m_lruMap;
 
     QString m_seed;
     int m_difficulty;

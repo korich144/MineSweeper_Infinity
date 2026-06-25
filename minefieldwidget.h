@@ -34,7 +34,6 @@ protected:
 
 private:
     QPointF cellToScreen(int64_t cx, int64_t cy) const;
-    void requestVisibleChunks();
 
     WorldManager *m_wm = nullptr;
     QVector<QPixmap> m_cellSprites;   // index corresponds to CellState
@@ -48,6 +47,9 @@ private:
     QElapsedTimer m_clickTimer;
     QPointF m_clickPos;
     bool m_mightDrag = false;
+
+    // pressed cell for visual feedback
+    QPoint m_pressedCell{-1, -1};   // cell coordinates when pressed
 };
 
 #endif // MINEFIELDWIDGET_H

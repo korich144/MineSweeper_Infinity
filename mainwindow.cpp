@@ -87,6 +87,12 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_field, &MinefieldWidget::startReveal, m_solver, &Solver::startReveal, Qt::QueuedConnection);
     connect(m_field, &MinefieldWidget::firstClick, this, &MainWindow::onFirstClick);
     connect(m_saver, &Saver::showSaveIndicator, this, &MainWindow::showSaveIndicator, Qt::QueuedConnection);
+    connect(m_saver, &Saver::saveFinished, this, &MainWindow::onSaveFinished, Qt::QueuedConnection);
+    connect(this, &MainWindow::requestSave, m_saver, &Saver::saveNow, Qt::QueuedConnection);
+
+    // smile button interactions
+    connect(ui->smileButton, &QPushButton::pressed, this, &MainWindow::onSmilePressed);
+    connect(ui->smileButton, &QPushButton::released, this, &MainWindow::onSmileReleased);
     connect(ui->smileButton, &QPushButton::clicked, this, &MainWindow::onSmileClicked);
 
     // UI timer 30 fps
@@ -98,6 +104,9 @@ MainWindow::MainWindow(QWidget *parent)
     QString theme = Settings::instance().theme;
     QString themePath = QString(":/themes/%1.bmp").arg(theme);
     QPixmap sheet(themePath);
+    if (sheet.isNull()) {
+        sheet.load("sprites/" + theme + ".bmp");
+    }
     if (!sheet.isNull()) {
         m_digitSprites.clear();
         for (int i = 0; i < 14; ++i)
@@ -210,17 +219,40 @@ void MainWindow::updateCounters() {
     statusBar()->showMessage(status);
 
     // smile icon
-    if (!m_wm->isGameActive()) {
-        ui->smileButton->setIcon(QIcon(m_smileSprites[2])); // defeat
-    } else {
-        ui->smileButton->setIcon(QIcon(m_smileSprites[4])); // normal
+    if (m_smileSprites.size() >= 5) {
+        if (!m_wm->isGameActive()) {
+            ui->smileButton->setIcon(QIcon(m_smileSprites[2]));
+        } else {
+            ui->smileButton->setIcon(QIcon(m_smileSprites[4]));
+        }
+    }
+}
+
+void MainWindow::onSmilePressed() {
+    if (m_smileSprites.size() >= 5)
+        ui->smileButton->setIcon(QIcon(m_smileSprites[0])); // pressed
+}
+
+void MainWindow::onSmileReleased() {
+    if (m_smileSprites.size() >= 5) {
+        if (m_wm && !m_wm->isGameActive())
+            ui->smileButton->setIcon(QIcon(m_smileSprites[2])); // defeat
+        else
+            ui->smileButton->setIcon(QIcon(m_smileSprites[4])); // normal
     }
 }
 
 void MainWindow::onSmileClicked() {
-    // save current world, start new with random seed
-    if (m_saver) m_saver->saveNow();
-    initNewWorld(World::generateSeed());
+    // Request save and then restart (handled in onSaveFinished)
+    m_restartAfterSave = true;
+    emit requestSave();
+}
+
+void MainWindow::onSaveFinished() {
+    if (m_restartAfterSave) {
+        m_restartAfterSave = false;
+        initNewWorld(World::generateSeed());
+    }
 }
 
 void MainWindow::showSaveIndicator() {
@@ -229,17 +261,17 @@ void MainWindow::showSaveIndicator() {
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     // save camera position
-    if (m_wm && m_currentWorldDir.length() > 0) {
+    if (m_wm && !m_currentWorldDir.isEmpty()) {
         WorldInfo info = World::load(m_currentWorldDir);
         // compute center cell as camera offset
-        QPointF topLeft = m_field->screenToCell(QPointF(0,0));
-        info.lastViewX = static_cast<qint64>(qFloor(topLeft.x() + width() / (2 * 16 * m_field->scale())));
-        info.lastViewY = static_cast<qint64>(qFloor(topLeft.y() + height() / (2 * 16 * m_field->scale())));
+        QPointF center = m_field->screenToCell(rect().center()); // using field's method
+        info.lastViewX = static_cast<qint64>(qFloor(center.x()));
+        info.lastViewY = static_cast<qint64>(qFloor(center.y()));
         World::save(m_currentWorldDir, info);
     }
     Settings::instance().windowSize = size();
     saveSettings();
-    if (m_saver) m_saver->saveNow();
+    emit requestSave();   // asynchronous save; app will quit after event loop ends
     event->accept();
 }
 
@@ -261,6 +293,7 @@ void MainWindow::setupOverlay() {
     m_overlay->setStyleSheet("background-color: rgba(0,0,0,150);");
     m_overlay->setGeometry(rect());
     m_overlay->show();
+    m_overlay->raise();   // ensure it's on top
 
     QFrame *frame = new QFrame(m_overlay);
     frame->setStyleSheet("background: white; border: 2px solid gray;");

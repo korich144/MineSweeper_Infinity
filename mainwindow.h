@@ -33,9 +33,15 @@ protected:
 
 private slots:
     void updateCounters();
+    void onSmilePressed();
+    void onSmileReleased();
     void onSmileClicked();
     void onFirstClick();
     void showSaveIndicator();
+    void onSaveFinished();
+
+signals:
+    void requestSave();
 
 private:
     void initNewWorld(const QString &seed);
@@ -59,6 +65,7 @@ private:
     QString m_currentSeed;
     QElapsedTimer m_gameTimer;
     bool m_gameStarted = false;
+    bool m_restartAfterSave = false;
 
     // sprites
     QVector<QPixmap> m_digitSprites;   // 14 items

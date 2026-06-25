@@ -17,15 +17,16 @@ public slots:
 
 signals:
     void showSaveIndicator();
+    void saveFinished();
+
+private slots:
+    void onTimer();
 
 private:
     WorldManager *m_wm;
     QString m_worldDir;
     QTimer *m_timer;
     bool m_dirty = false;
-
-private slots:
-    void onTimer();
 };
 
 #endif // SAVER_H
