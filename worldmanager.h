@@ -23,13 +23,15 @@ public:
     CellState cellStateAt(int64_t x, int64_t y) const;
 
     void setCellState(int64_t x, int64_t y, CellState state);
+    void setCellStateIfLoaded(int64_t x, int64_t y, CellState state);
     void setMine(int64_t x, int64_t y);
 
-    bool revealCell(int64_t x, int64_t y);   // check for mine; returns true if not mine
-    void requestChunk(int64_t chunkX, int64_t chunkY); // emit chunkNeeded
+    bool revealCell(int64_t x, int64_t y);
+    void requestChunk(int64_t chunkX, int64_t chunkY);
 
     std::shared_ptr<Chunk> getChunk(int64_t chunkX, int64_t chunkY);
     void addLoadedChunk(std::shared_ptr<Chunk> chunk);
+    void fixupChunkCells(std::shared_ptr<Chunk> chunk);
 
     std::set<QPair<int64_t,int64_t>> dirtyRegions() const;
     QHash<ChunkCoord, std::shared_ptr<Chunk>> getChunksForRegion(int64_t regX, int64_t regY) const;
@@ -42,11 +44,13 @@ public:
 
 signals:
     void chunkNeeded(int64_t chunkX, int64_t chunkY);
+    void requestSave();   // emitted when too many dirty chunks
 
 private:
     static constexpr int REGION_SHIFT = 10;
     static constexpr int CHUNK_SHIFT  = 4;
-    static constexpr int MAX_CACHE    = 512;
+    static constexpr int MAX_CACHE    = 4096;
+    static constexpr double DIRTY_SAVE_TRIGGER = 0.8;
 
     int64_t chunkIdx(int64_t cell) const { return cell >> CHUNK_SHIFT; }
     int64_t regionIdx(int64_t cell) const { return cell >> REGION_SHIFT; }
@@ -54,6 +58,7 @@ private:
     std::shared_ptr<Chunk> getOrCreateChunk(int64_t cx, int64_t cy);
     void touchChunk(const ChunkCoord &coord);
     void evictOneIfNeeded();
+    void checkDirtyRatio();
 
     mutable QReadWriteLock m_lock;
     QHash<ChunkCoord, std::shared_ptr<Chunk>> m_chunks;

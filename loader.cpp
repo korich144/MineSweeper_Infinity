@@ -43,22 +43,14 @@ void Loader::loadChunk(int64_t chunkX, int64_t chunkY) {
 }
 
 void Loader::scanBorderForActive(int64_t chunkX, int64_t chunkY) {
-    // After loading a chunk, check all neighboring cells in adjacent chunks that are ACTIVE
     auto check = [this](int64_t x, int64_t y) {
-        if (m_wm->cellStateAt(x, y) == CellState::ACTIVE)
+        if (m_wm->cellStateAt(x, y) == CellState::ACTIVE) {
             m_solver->addToQueue(x, y);
+            m_solver->processQueueIfIdle();   // <-- запрос на обработку
+        }
     };
-
-    // left border
-    for (int i = 0; i < 16; ++i)
-        check(chunkX * 16 - 1, chunkY * 16 + i);
-    // right border
-    for (int i = 0; i < 16; ++i)
-        check((chunkX + 1) * 16, chunkY * 16 + i);
-    // top border
-    for (int i = 0; i < 16; ++i)
-        check(chunkX * 16 + i, chunkY * 16 - 1);
-    // bottom border
-    for (int i = 0; i < 16; ++i)
-        check(chunkX * 16 + i, (chunkY + 1) * 16);
+    for (int i = 0; i < 16; ++i) check(chunkX * 16 - 1, chunkY * 16 + i);
+    for (int i = 0; i < 16; ++i) check((chunkX + 1) * 16, chunkY * 16 + i);
+    for (int i = 0; i < 16; ++i) check(chunkX * 16 + i, chunkY * 16 - 1);
+    for (int i = 0; i < 16; ++i) check(chunkX * 16 + i, (chunkY + 1) * 16);
 }

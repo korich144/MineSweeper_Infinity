@@ -12,6 +12,7 @@ class Solver;
 class Loader;
 class Saver;
 class MinefieldWidget;
+class CounterWidget;
 class QFrame;
 class QLineEdit;
 class QComboBox;
@@ -44,8 +45,10 @@ signals:
     void requestSave();
 
 private:
-    void initNewWorld(const QString &seed);
+    void initNewWorld(const QString &seed, bool fromOverlay = false);
     void loadWorld(const QString &worldPath);
+    void startEngine();
+    void stopEngine();
     void saveSettings();
     void setupOverlay();
 
@@ -64,14 +67,16 @@ private:
     QString m_currentWorldDir;
     QString m_currentSeed;
     QElapsedTimer m_gameTimer;
+    qint64 m_elapsedOffset = 0;
+    qint64 m_score = 0;
     bool m_gameStarted = false;
     bool m_restartAfterSave = false;
 
-    // sprites
-    QVector<QPixmap> m_digitSprites;   // 14 items
-    QVector<QPixmap> m_smileSprites;   // 5 items
+    QVector<QPixmap> m_digitSprites;
+    QVector<QPixmap> m_smileSprites;
+    CounterWidget *m_scoreWidget = nullptr;
+    CounterWidget *m_timeWidget = nullptr;
 
-    // overlay
     QFrame *m_overlay = nullptr;
 };
 

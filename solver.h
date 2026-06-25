@@ -18,9 +18,10 @@ public:
 public slots:
     void startReveal(int64_t x, int64_t y);
     void addToQueue(int64_t x, int64_t y);
+    void processQueueIfIdle();
 
 signals:
-    void finished();   // optional
+    void finished();
 
 private:
     void processCell(int64_t x, int64_t y, int depth = 0);

@@ -30,7 +30,7 @@ CellState WorldManager::cellStateAt(int64_t x, int64_t y) const {
     int64_t cy = chunkIdx(y);
     auto it = m_chunks.constFind({cx, cy});
     if (it == m_chunks.constEnd())
-        return CellState::CLOSED;   // unloaded chunk = all closed
+        return CellState::CLOSED;
     int lx = x & 15;
     int ly = y & 15;
     return it.value()->cells[lx][ly];
@@ -46,6 +46,23 @@ void WorldManager::setCellState(int64_t x, int64_t y, CellState state) {
     if (chunk->cells[lx][ly] != state) {
         chunk->cells[lx][ly] = state;
         chunk->dirty = true;
+        checkDirtyRatio();
+    }
+}
+
+void WorldManager::setCellStateIfLoaded(int64_t x, int64_t y, CellState state) {
+    QWriteLocker locker(&m_lock);
+    int64_t cx = chunkIdx(x);
+    int64_t cy = chunkIdx(y);
+    auto it = m_chunks.find({cx, cy});
+    if (it == m_chunks.end()) return;   // chunk not loaded, ignore
+    auto chunk = it.value();
+    int lx = x & 15;
+    int ly = y & 15;
+    if (chunk->cells[lx][ly] != state) {
+        chunk->cells[lx][ly] = state;
+        chunk->dirty = true;
+        checkDirtyRatio();
     }
 }
 
@@ -58,6 +75,7 @@ void WorldManager::setMine(int64_t x, int64_t y) {
     int ly = y & 15;
     chunk->mine[lx][ly] = true;
     chunk->dirty = true;
+    checkDirtyRatio();
 }
 
 bool WorldManager::revealCell(int64_t x, int64_t y) {
@@ -83,13 +101,39 @@ std::shared_ptr<Chunk> WorldManager::getChunk(int64_t chunkX, int64_t chunkY) {
 }
 
 void WorldManager::addLoadedChunk(std::shared_ptr<Chunk> chunk) {
-    QWriteLocker locker(&m_lock);
-    ChunkCoord coord{chunk->chunkX, chunk->chunkY};
-    if (m_chunks.contains(coord))
-        return;
-    m_chunks[coord] = chunk;
-    touchChunk(coord);
-    evictOneIfNeeded();
+    {
+        QWriteLocker locker(&m_lock);
+        ChunkCoord coord{chunk->chunkX, chunk->chunkY};
+        if (m_chunks.contains(coord))
+            return;
+        m_chunks[coord] = chunk;
+        touchChunk(coord);
+        evictOneIfNeeded();
+        checkDirtyRatio();
+    }
+    fixupChunkCells(chunk);
+}
+
+void WorldManager::fixupChunkCells(std::shared_ptr<Chunk> chunk) {
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            CellState &st = chunk->cells[x][y];
+            if (st >= CellState::OPENED_8 && st <= CellState::OPENED_0) {
+                int64_t worldX = (chunk->chunkX << 4) + x;
+                int64_t worldY = (chunk->chunkY << 4) + y;
+                int mines = 0;
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx)
+                        if (dx != 0 || dy != 0)
+                            if (isMine(worldX + dx, worldY + dy))
+                                ++mines;
+                if (mines == 0)
+                    st = CellState::OPENED_0;
+                else
+                    st = static_cast<CellState>(15 - mines);
+            }
+        }
+    }
 }
 
 std::set<QPair<int64_t,int64_t>> WorldManager::dirtyRegions() const {
@@ -108,7 +152,7 @@ std::set<QPair<int64_t,int64_t>> WorldManager::dirtyRegions() const {
 QHash<ChunkCoord, std::shared_ptr<Chunk>> WorldManager::getChunksForRegion(int64_t regX, int64_t regY) const {
     QReadLocker locker(&m_lock);
     QHash<ChunkCoord, std::shared_ptr<Chunk>> result;
-    int64_t baseX = regX << 6; // 64 chunks per region side
+    int64_t baseX = regX << 6;
     int64_t baseY = regY << 6;
     for (auto it = m_chunks.cbegin(); it != m_chunks.cend(); ++it) {
         int64_t cx = it.key().first;
@@ -160,17 +204,17 @@ std::shared_ptr<Chunk> WorldManager::getOrCreateChunk(int64_t cx, int64_t cy) {
     m_chunks[coord] = chunk;
     touchChunk(coord);
     evictOneIfNeeded();
+    checkDirtyRatio();
     return chunk;
 }
 
 void WorldManager::touchChunk(const ChunkCoord &coord) {
-    m_lru.removeAll(coord);      // удаляем старые вхождения
-    m_lru.push_front(coord);     // вставляем в начало
+    m_lru.removeAll(coord);
+    m_lru.push_front(coord);
 }
 
 void WorldManager::evictOneIfNeeded() {
     while (m_chunks.size() > MAX_CACHE) {
-        // ищем с конца (наименее используемый) не dirty чанк
         bool removed = false;
         for (int i = m_lru.size() - 1; i >= 0; --i) {
             const ChunkCoord &coord = m_lru.at(i);
@@ -182,12 +226,23 @@ void WorldManager::evictOneIfNeeded() {
                     break;
                 }
             } else {
-                // такого чанка уже нет (был удалён) – просто убираем из lru
                 m_lru.removeAt(i);
                 removed = true;
                 break;
             }
         }
-        if (!removed) break; // все dirty или lru пуст
+        if (!removed) break;
+    }
+}
+
+void WorldManager::checkDirtyRatio() {
+    if (MAX_CACHE == 0) return;
+    int dirtyCount = 0;
+    for (const auto &chunk : m_chunks) {
+        if (chunk->dirty) ++dirtyCount;
+    }
+    double ratio = static_cast<double>(dirtyCount) / MAX_CACHE;
+    if (ratio >= DIRTY_SAVE_TRIGGER) {
+        emit requestSave();
     }
 }

@@ -14,6 +14,7 @@ public:
     int difficulty = 6;
     QString theme = "light";
     QSize windowSize{800, 600};
+    bool maximized = false;
     QString lastWorld;
 };
 

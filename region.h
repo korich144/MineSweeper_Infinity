@@ -16,7 +16,7 @@ public:
 
 private:
     static constexpr int CHUNKS_PER_SIDE = 64;
-    static constexpr int HEADER_SIZE = (CHUNKS_PER_SIDE * CHUNKS_PER_SIDE) / 8; // 512
+    static constexpr int HEADER_SIZE = (CHUNKS_PER_SIDE * CHUNKS_PER_SIDE) / 8;
     static constexpr int CHUNK_DATA_SIZE = 64;
 
     static int chunkIndex(int64_t chunkX, int64_t chunkY, int64_t regX, int64_t regY);

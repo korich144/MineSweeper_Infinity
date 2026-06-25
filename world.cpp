@@ -17,6 +17,10 @@ WorldInfo World::load(const QString &worldPath) {
     info.originalName = o.value("originalName").toString();
     info.lastViewX = static_cast<qint64>(o.value("lastViewX").toDouble());
     info.lastViewY = static_cast<qint64>(o.value("lastViewY").toDouble());
+    info.lastScale = o.value("lastScale").toDouble(1.0);
+    info.score = static_cast<qint64>(o.value("score").toDouble());
+    info.elapsed = static_cast<qint64>(o.value("elapsed").toDouble());
+    info.gameActive = o.value("gameActive").toBool(true);
     info.folderName = QDir(worldPath).dirName();
     return info;
 }
@@ -27,6 +31,10 @@ void World::save(const QString &worldPath, const WorldInfo &info) {
     o["originalName"] = info.originalName;
     o["lastViewX"] = static_cast<double>(info.lastViewX);
     o["lastViewY"] = static_cast<double>(info.lastViewY);
+    o["lastScale"] = info.lastScale;
+    o["score"] = static_cast<double>(info.score);
+    o["elapsed"] = static_cast<double>(info.elapsed);
+    o["gameActive"] = info.gameActive;
 
     QDir().mkpath(worldPath);
     QFile f(worldPath + "/world.ini");

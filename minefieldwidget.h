@@ -5,6 +5,7 @@
 #include <QPixmap>
 #include <QPointF>
 #include <QElapsedTimer>
+#include <optional>
 
 class WorldManager;
 
@@ -17,13 +18,15 @@ public:
     void setWorldManager(WorldManager *wm) { m_wm = wm; }
     void setTheme(const QString &themeName);
     double scale() const { return m_scale; }
+    void setScale(double scale);
     void setOffset(int64_t x, int64_t y);
     void centerOn(int64_t x, int64_t y);
+
     QPointF screenToCell(const QPointF &pos) const;
 
 signals:
-    void startReveal(int64_t x, int64_t y);   // sent to Solver
-    void firstClick();                        // to start game timer
+    void startReveal(int64_t x, int64_t y);
+    void firstClick();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -36,11 +39,11 @@ private:
     QPointF cellToScreen(int64_t cx, int64_t cy) const;
 
     WorldManager *m_wm = nullptr;
-    QVector<QPixmap> m_cellSprites;   // index corresponds to CellState
+    QVector<QPixmap> m_cellSprites;
     double m_scale = 1.0;
-    QPointF m_offset;                 // screen coords of world cell (0,0)
+    QPointF m_offset;
 
-    // drag/click state
+    // dragging
     bool m_dragging = false;
     QPointF m_dragStartPos;
     QPointF m_dragStartOffset;
@@ -48,8 +51,7 @@ private:
     QPointF m_clickPos;
     bool m_mightDrag = false;
 
-    // pressed cell for visual feedback
-    QPoint m_pressedCell{-1, -1};   // cell coordinates when pressed
+    std::optional<QPair<int64_t, int64_t>> m_pressedCell;
 };
 
 #endif // MINEFIELDWIDGET_H

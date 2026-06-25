@@ -9,7 +9,11 @@ struct WorldInfo {
     QString originalName;
     qint64 lastViewX = 0;
     qint64 lastViewY = 0;
-    QString folderName;   // current directory name
+    double lastScale = 1.0;
+    qint64 score = 0;
+    qint64 elapsed = 0;     // миллисекунды
+    bool gameActive = true;
+    QString folderName;
 };
 
 class World {

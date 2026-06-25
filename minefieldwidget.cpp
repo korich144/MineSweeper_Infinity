@@ -18,7 +18,6 @@ void MinefieldWidget::setTheme(const QString &themeName) {
     QString path = QString(":/themes/%1.bmp").arg(themeName);
     QPixmap sheet(path);
     if (sheet.isNull()) {
-        // fallback: try to load from file system
         sheet.load("sprites/" + themeName + ".bmp");
     }
     if (sheet.isNull()) {
@@ -30,7 +29,11 @@ void MinefieldWidget::setTheme(const QString &themeName) {
     for (int i = 0; i < 16; ++i) {
         m_cellSprites.append(sheet.copy(i * 16, 0, 16, 16));
     }
-    // digit and smile sprites are handled by MainWindow
+    update();
+}
+
+void MinefieldWidget::setScale(double scale) {
+    m_scale = qBound(0.1, scale, 10.0);
     update();
 }
 
@@ -51,8 +54,7 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
     p.setRenderHint(QPainter::SmoothPixmapTransform, false);
     p.fillRect(rect(), Qt::darkGray);
 
-    if (!m_wm || m_cellSprites.size() < 16)
-        return;
+    if (!m_wm || m_cellSprites.size() < 16) return;
 
     QPointF topLeft = screenToCell(QPointF(0, 0));
     QPointF bottomRight = screenToCell(QPointF(width(), height()));
@@ -70,8 +72,7 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
         for (int64_t cx = chunkMinX; cx <= chunkMaxX; ++cx) {
             auto chunk = m_wm->getChunk(cx, cy);
             if (!chunk) {
-                m_wm->requestChunk(cx, cy); // async load
-                // draw all as CLOSED
+                m_wm->requestChunk(cx, cy);
                 for (int i = 0; i < 16; ++i) {
                     for (int j = 0; j < 16; ++j) {
                         int64_t cellX = (cx << 4) + i;
@@ -91,9 +92,10 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
                         CellState st = chunk->cells[i][j];
                         QPointF sp = cellToScreen(cellX, cellY);
                         QRectF targetRect(sp, QSizeF(16 * m_scale, 16 * m_scale));
-                        // visual feedback for pressed closed cell
-                        if (m_pressedCell.x() == cellX && m_pressedCell.y() == cellY && st == CellState::CLOSED) {
-                            // draw a bit darker (no dedicated sprite) by tinting
+
+                        bool pressed = m_pressedCell.has_value() &&
+                                       m_pressedCell->first == cellX && m_pressedCell->second == cellY;
+                        if (pressed && st == CellState::CLOSED) {
                             QPixmap tinted = m_cellSprites[static_cast<int>(CellState::CLOSED)];
                             QPainter pixp(&tinted);
                             pixp.fillRect(tinted.rect(), QColor(0, 0, 0, 64));
@@ -127,9 +129,8 @@ void MinefieldWidget::mousePressEvent(QMouseEvent *event) {
         QPointF cell = screenToCell(event->pos());
         int64_t cx = static_cast<int64_t>(qFloor(cell.x()));
         int64_t cy = static_cast<int64_t>(qFloor(cell.y()));
-        // remember pressed cell for visual feedback
-        m_pressedCell = QPoint(cx, cy);
-        update();   // repaint to show pressed state
+        m_pressedCell = QPair<int64_t, int64_t>(cx, cy);
+        update();
     } else if (event->button() == Qt::RightButton) {
         if (!m_wm || !m_wm->isGameActive()) return;
         QPointF cell = screenToCell(event->pos());
@@ -153,8 +154,7 @@ void MinefieldWidget::mousePressEvent(QMouseEvent *event) {
 
 void MinefieldWidget::mouseReleaseEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton) {
-        // clear pressed cell feedback
-        m_pressedCell = QPoint(-1, -1);
+        m_pressedCell = std::nullopt;
         update();
 
         if (m_mightDrag) return;
@@ -191,11 +191,10 @@ void MinefieldWidget::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void MinefieldWidget::wheelEvent(QWheelEvent *event) {
-    double factor = 1.0 + event->angleDelta().y() / 1200.0;
-    double oldScale = m_scale;
-    m_scale = qBound(0.1, m_scale * factor, 10.0);
     QPointF mousePos = event->position();
-    QPointF worldBefore = screenToCell(mousePos);
+    QPointF worldBefore = screenToCell(mousePos);   // старый масштаб!
+    double factor = 1.0 + event->angleDelta().y() / 1200.0;
+    m_scale = qBound(0.1, m_scale * factor, 10.0);
     m_offset = mousePos - QPointF(worldBefore.x() * 16 * m_scale,
                                   worldBefore.y() * 16 * m_scale);
     update();

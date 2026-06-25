@@ -39,6 +39,7 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         world.h world.cpp
         minefieldwidget.h minefieldwidget.cpp
         ${RESOURCES}
+        counterwidget.h counterwidget.cpp
     )
 # Define target properties for Android with Qt 6 as:
 #    set_property(TARGET MineSweeper_Infinity APPEND PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR
