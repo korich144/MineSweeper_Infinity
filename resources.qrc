@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/themes">
+        <file alias="dark.bmp">sprites/dark.bmp</file>
+        <file alias="light.bmp">sprites/light.bmp</file>
+    </qresource>
+</RCC>
