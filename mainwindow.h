@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QPixmap>
 #include <QThread>
+#include <QLabel>
 
 class WorldManager;
 class Solver;
@@ -40,6 +41,10 @@ private slots:
     void onFirstClick();
     void showSaveIndicator();
     void onSaveFinished();
+    void onCellsOpened(int count);
+    void onFlagToggled(int delta);
+    void onMouseCellChanged(int64_t x, int64_t y);
+    void restoreCamera();
 
 signals:
     void requestSave();
@@ -69,13 +74,22 @@ private:
     QElapsedTimer m_gameTimer;
     qint64 m_elapsedOffset = 0;
     qint64 m_score = 0;
+    int m_flagsPlaced = 0;
     bool m_gameStarted = false;
+    bool m_gamePaused = false;
     bool m_restartAfterSave = false;
+
+    bool m_cameraRestored = false;
+    double m_restoreScale = 1.0;
+    int64_t m_restoreCellX = 0;
+    int64_t m_restoreCellY = 0;
 
     QVector<QPixmap> m_digitSprites;
     QVector<QPixmap> m_smileSprites;
     CounterWidget *m_scoreWidget = nullptr;
     CounterWidget *m_timeWidget = nullptr;
+
+    QLabel *m_coordLabel = nullptr;
 
     QFrame *m_overlay = nullptr;
 };

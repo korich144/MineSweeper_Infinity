@@ -109,6 +109,10 @@ MainWindow::MainWindow(QWidget *parent)
     QTimer *uiTimer = new QTimer(this);
     connect(uiTimer, &QTimer::timeout, this, &MainWindow::updateCounters);
     uiTimer->start(33);
+
+    m_coordLabel = new QLabel("X: 0 Y: 0", this);
+    statusBar()->addPermanentWidget(m_coordLabel);
+    QTimer::singleShot(0, this, &MainWindow::restoreCamera);
 }
 
 MainWindow::~MainWindow() {
@@ -145,6 +149,10 @@ void MainWindow::startEngine() {
     connect(ui->smileButton, &QPushButton::pressed, this, &MainWindow::onSmilePressed);
     connect(ui->smileButton, &QPushButton::released, this, &MainWindow::onSmileReleased);
     connect(ui->smileButton, &QPushButton::clicked, this, &MainWindow::onSmileClicked);
+
+    connect(m_solver, &Solver::cellsOpened, this, &MainWindow::onCellsOpened, Qt::QueuedConnection);
+    connect(m_field, &MinefieldWidget::flagToggled, this, &MainWindow::onFlagToggled);
+    connect(m_field, &MinefieldWidget::mouseCellChanged, this, &MainWindow::onMouseCellChanged);
 }
 
 void MainWindow::stopEngine() {
@@ -157,6 +165,9 @@ void MainWindow::stopEngine() {
     disconnect(ui->smileButton, &QPushButton::pressed, this, &MainWindow::onSmilePressed);
     disconnect(ui->smileButton, &QPushButton::released, this, &MainWindow::onSmileReleased);
     disconnect(ui->smileButton, &QPushButton::clicked, this, &MainWindow::onSmileClicked);
+    disconnect(m_solver, &Solver::cellsOpened, this, &MainWindow::onCellsOpened);
+    disconnect(m_field, &MinefieldWidget::flagToggled, this, &MainWindow::onFlagToggled);
+    disconnect(m_field, &MinefieldWidget::mouseCellChanged, this, &MainWindow::onMouseCellChanged);
 
     m_solverThread->quit();
     m_loaderThread->quit();
@@ -171,6 +182,7 @@ void MainWindow::stopEngine() {
     m_solver = nullptr;
     m_loader = nullptr;
     m_saver = nullptr;
+    m_cameraRestored = false;
 }
 
 void MainWindow::initNewWorld(const QString &seed, bool fromOverlay) {
@@ -187,6 +199,8 @@ void MainWindow::initNewWorld(const QString &seed, bool fromOverlay) {
     info.gameActive = true;
     info.elapsed = 0;
     info.score = 0;
+    m_flagsPlaced = 0;
+    m_gamePaused = false;
     info.folderName = folderName;
     World::save(worldPath, info);
 
@@ -206,6 +220,10 @@ void MainWindow::initNewWorld(const QString &seed, bool fromOverlay) {
     m_elapsedOffset = 0;
     m_score = 0;
     m_gameTimer.invalidate();
+
+    m_restoreScale = 1.0;
+    m_restoreCellX = 0;
+    m_restoreCellY = 0;
 }
 
 void MainWindow::loadWorld(const QString &worldPath) {
@@ -225,17 +243,24 @@ void MainWindow::loadWorld(const QString &worldPath) {
     m_wm = new WorldManager(info.seed, Settings::instance().difficulty, this);
     m_field->setWorldManager(m_wm);
 
-    m_field->setOffset(0, 0);
-    m_field->centerOn(info.lastViewX, info.lastViewY);
-    m_field->setScale(info.lastScale);
-
     m_gameStarted = info.gameActive;
     m_elapsedOffset = info.elapsed;
-    m_score = info.score;
-    if (m_gameStarted)
-        m_gameTimer.start();
-    else
-        m_gameTimer.invalidate();
+    m_flagsPlaced = static_cast<int>(info.flagsPlaced);
+    m_score = static_cast<int>(info.score);
+    m_gamePaused = !info.gameActive;
+    if (m_gamePaused) {
+        m_gameStarted = false;
+    } else {
+        m_gameStarted = info.gameActive;
+        if (m_gameStarted)
+            m_gameTimer.start();
+        else
+            m_gameTimer.invalidate();
+    }
+
+    m_restoreScale = info.lastScale;
+    m_restoreCellX = info.lastViewX;
+    m_restoreCellY = info.lastViewY;
 }
 
 void MainWindow::saveSettings() {
@@ -262,7 +287,13 @@ void MainWindow::updateCounters() {
         int s = (ms % 60000) / 1000;
         timeStr = QString("%1:%2:%3").arg(h,2,10,QChar('0')).arg(m,2,10,QChar('0')).arg(s,2,10,QChar('0'));
     } else {
-        qint64 ms = m_elapsedOffset + (m_gameTimer.isValid() ? m_gameTimer.elapsed() : 0);
+        if (m_gameStarted && !m_wm->isGameActive()) {
+            m_elapsedOffset += m_gameTimer.elapsed();
+            m_gameTimer.invalidate();
+            m_gameStarted = false;
+            m_gamePaused = true;
+        }
+        qint64 ms = m_elapsedOffset;
         int h = ms / 3600000;
         int m = (ms % 3600000) / 60000;
         int s = (ms % 60000) / 1000;
@@ -270,22 +301,12 @@ void MainWindow::updateCounters() {
     }
     m_timeWidget->setValue(timeStr);
 
-    // очки
+    m_scoreWidget->setValue(QString::number(m_score).rightJustified(6, ' '));
+
     int opened, flagged;
     m_wm->countStats(opened, flagged);
-    static int lastOpened = -1;
-    if (lastOpened != -1 && opened > lastOpened) {
-        int diff = m_wm->difficulty();
-        int delta = (diff > 0) ? ((opened - lastOpened) * diff / 10) : 0;
-        m_score += delta;
-        if (m_score > 999999) m_score = 999999;
-    }
-    lastOpened = opened;
-    QString scoreStr = QString::number(m_score).rightJustified(6, ' ');
-    m_scoreWidget->setValue(scoreStr);
-
     QString status = QString("Сложность: %1 | Флажков: %2 | Открыто: %3")
-                         .arg(m_wm->difficulty()).arg(flagged).arg(opened);
+                         .arg(m_wm->difficulty()).arg(m_flagsPlaced).arg(opened);
     statusBar()->showMessage(status);
 
     if (m_smileSprites.size() >= 5) {
@@ -296,6 +317,32 @@ void MainWindow::updateCounters() {
     }
 
     m_field->update();   // принудительная перерисовка поля
+}
+
+void MainWindow::onCellsOpened(int count) {
+    if (!m_wm) return;
+    int diff = m_wm->difficulty();
+    if (diff > 0) {
+        m_score += count * diff / 10;
+        if (m_score > 999999) m_score = 0;
+    }
+}
+
+void MainWindow::onFlagToggled(int delta) {
+    m_flagsPlaced += delta;
+    if (m_flagsPlaced < 0) m_flagsPlaced = 0;
+}
+
+void MainWindow::onMouseCellChanged(int64_t x, int64_t y) {
+    m_coordLabel->setText(QString("X: %1 Y: %2").arg(x).arg(y));
+}
+
+void MainWindow::restoreCamera() {
+    if (m_cameraRestored || !m_field || !m_wm) return;
+    m_cameraRestored = true;
+    m_field->setOffset(0, 0);
+    m_field->setScale(m_restoreScale);
+    m_field->centerOn(m_restoreCellX, m_restoreCellY);
 }
 
 void MainWindow::onSmilePressed() {
@@ -337,13 +384,14 @@ void MainWindow::showSaveIndicator() {
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (m_wm && !m_currentWorldDir.isEmpty()) {
         WorldInfo info = World::load(m_currentWorldDir);
-        QPointF center = m_field->screenToCell(rect().center());
+        QPointF center = m_field->screenToCell(m_field->rect().center());
         info.lastViewX = static_cast<qint64>(qFloor(center.x()));
         info.lastViewY = static_cast<qint64>(qFloor(center.y()));
         info.lastScale = m_field->scale();
         info.score = m_score;
         info.elapsed = m_elapsedOffset + (m_gameTimer.isValid() ? m_gameTimer.elapsed() : 0);
         info.gameActive = m_wm->isGameActive() && m_gameStarted;
+        info.flagsPlaced = m_flagsPlaced;
         World::save(m_currentWorldDir, info);
     }
 

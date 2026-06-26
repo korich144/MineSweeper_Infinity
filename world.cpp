@@ -19,6 +19,7 @@ WorldInfo World::load(const QString &worldPath) {
     info.lastViewY = static_cast<qint64>(o.value("lastViewY").toDouble());
     info.lastScale = o.value("lastScale").toDouble(1.0);
     info.score = static_cast<qint64>(o.value("score").toDouble());
+    info.flagsPlaced = static_cast<qint64>(o.value("flagsPlaced").toDouble());
     info.elapsed = static_cast<qint64>(o.value("elapsed").toDouble());
     info.gameActive = o.value("gameActive").toBool(true);
     info.folderName = QDir(worldPath).dirName();
@@ -33,6 +34,7 @@ void World::save(const QString &worldPath, const WorldInfo &info) {
     o["lastViewY"] = static_cast<double>(info.lastViewY);
     o["lastScale"] = info.lastScale;
     o["score"] = static_cast<double>(info.score);
+    o["flagsPlaced"] = static_cast<double>(info.flagsPlaced);
     o["elapsed"] = static_cast<double>(info.elapsed);
     o["gameActive"] = info.gameActive;
 

@@ -137,12 +137,15 @@ void MinefieldWidget::mousePressEvent(QMouseEvent *event) {
         int64_t cx = static_cast<int64_t>(qFloor(cell.x()));
         int64_t cy = static_cast<int64_t>(qFloor(cell.y()));
         CellState st = m_wm->cellStateAt(cx, cy);
-        if (st == CellState::CLOSED)
+        if (st == CellState::CLOSED) {
             m_wm->setCellState(cx, cy, CellState::FLAGGED);
-        else if (st == CellState::FLAGGED)
+            emit flagToggled(1);
+        } else if (st == CellState::FLAGGED) {
             m_wm->setCellState(cx, cy, CellState::QUESTION);
-        else if (st == CellState::QUESTION)
+            emit flagToggled(-1);
+        } else if (st == CellState::QUESTION) {
             m_wm->setCellState(cx, cy, CellState::CLOSED);
+        }
         update();
     } else if (event->button() == Qt::MiddleButton) {
         m_dragging = true;
@@ -188,6 +191,10 @@ void MinefieldWidget::mouseMoveEvent(QMouseEvent *event) {
         if (!m_mightDrag && (event->pos() - m_clickPos).manhattanLength() > 3)
             m_mightDrag = true;
     }
+    QPointF cell = screenToCell(event->pos());
+    int64_t cx = static_cast<int64_t>(qFloor(cell.x()));
+    int64_t cy = static_cast<int64_t>(qFloor(cell.y()));
+    emit mouseCellChanged(cx, cy);
 }
 
 void MinefieldWidget::wheelEvent(QWheelEvent *event) {

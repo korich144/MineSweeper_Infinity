@@ -27,6 +27,8 @@ public:
 signals:
     void startReveal(int64_t x, int64_t y);
     void firstClick();
+    void flagToggled(int delta);
+    void mouseCellChanged(int64_t x, int64_t y);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -43,7 +45,6 @@ private:
     double m_scale = 1.0;
     QPointF m_offset;
 
-    // dragging
     bool m_dragging = false;
     QPointF m_dragStartPos;
     QPointF m_dragStartOffset;

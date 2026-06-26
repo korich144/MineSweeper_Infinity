@@ -11,7 +11,8 @@ struct WorldInfo {
     qint64 lastViewY = 0;
     double lastScale = 1.0;
     qint64 score = 0;
-    qint64 elapsed = 0;     // миллисекунды
+    qint64 flagsPlaced = 0;
+    qint64 elapsed = 0;
     bool gameActive = true;
     QString folderName;
 };

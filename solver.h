@@ -22,6 +22,7 @@ public slots:
 
 signals:
     void finished();
+    void cellsOpened(int count);
 
 private:
     void processCell(int64_t x, int64_t y, int depth = 0);
@@ -31,6 +32,7 @@ private:
     std::atomic<bool> m_running{false};
     QMutex m_queueMutex;
     QSet<QPair<int64_t, int64_t>> m_activeQueue;
+    int m_openedCounter = 0;
     static constexpr int MAX_RECURSION = 10000;
 };
 
