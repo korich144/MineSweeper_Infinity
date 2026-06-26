@@ -70,7 +70,7 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
 
     for (int64_t cy = chunkMinY; cy <= chunkMaxY; ++cy) {
         for (int64_t cx = chunkMinX; cx <= chunkMaxX; ++cx) {
-            auto chunk = m_wm->getChunk(cx, cy);
+            auto chunk = m_wm->getChunkUnsafe(cx, cy);
             if (!chunk) {
                 m_wm->requestChunk(cx, cy);
                 for (int i = 0; i < 16; ++i) {

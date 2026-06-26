@@ -136,6 +136,24 @@ void WorldManager::fixupChunkCells(std::shared_ptr<Chunk> chunk) {
     }
 }
 
+CellState WorldManager::cellStateAtUnsafe(int64_t x, int64_t y) const {
+    int64_t cx = chunkIdx(x);
+    int64_t cy = chunkIdx(y);
+    auto it = m_chunks.constFind({cx, cy});
+    if (it == m_chunks.constEnd())
+        return CellState::CLOSED;
+    int lx = x & 15;
+    int ly = y & 15;
+    return it.value()->cells[lx][ly];
+}
+
+std::shared_ptr<Chunk> WorldManager::getChunkUnsafe(int64_t chunkX, int64_t chunkY) const {
+    auto it = m_chunks.constFind({chunkX, chunkY});
+    if (it != m_chunks.constEnd())
+        return it.value();
+    return nullptr;
+}
+
 std::set<QPair<int64_t,int64_t>> WorldManager::dirtyRegions() const {
     QReadLocker locker(&m_lock);
     std::set<QPair<int64_t,int64_t>> regs;

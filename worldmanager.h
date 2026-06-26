@@ -33,6 +33,9 @@ public:
     void addLoadedChunk(std::shared_ptr<Chunk> chunk);
     void fixupChunkCells(std::shared_ptr<Chunk> chunk);
 
+    CellState cellStateAtUnsafe(int64_t x, int64_t y) const;
+    std::shared_ptr<Chunk> getChunkUnsafe(int64_t chunkX, int64_t chunkY) const;
+
     std::set<QPair<int64_t,int64_t>> dirtyRegions() const;
     QHash<ChunkCoord, std::shared_ptr<Chunk>> getChunksForRegion(int64_t regX, int64_t regY) const;
     void clearDirtyForRegions(const std::set<QPair<int64_t,int64_t>> &regions);
