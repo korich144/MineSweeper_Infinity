@@ -13,14 +13,43 @@ static uint64_t seedHash(const QString &seed) {
 
 WorldManager::WorldManager(const QString &seed, int difficulty, QObject *parent)
     : QObject(parent), m_seed(seed), m_difficulty(difficulty)
-{}
+{
+    computeHash();
+}
+
+void WorldManager::setSeed(const QString &seed) {
+    m_seed = seed;
+    computeHash();
+}
+
+void WorldManager::computeHash() {
+    // Простой хеш, можно использовать QCryptographicHash::sha256 и взять первые 8 байт
+    QByteArray ba = m_seed.toUtf8();
+    uint64_t h = 0;
+    for (char c : ba) {
+        h = (h * 131) + static_cast<uint8_t>(c);
+    }
+    // дополнительное перемешивание
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    m_hash = h;
+}
 
 bool WorldManager::isMine(int64_t x, int64_t y) const {
     if (m_difficulty <= 0) return false;
-    uint64_t h = seedHash(m_seed);
-    h ^= static_cast<uint64_t>(x);
-    h ^= static_cast<uint64_t>(y) << 1;
-    h *= 0x9e3779b97f4a7c15ULL;
+    uint64_t h = m_hash;
+    // смешиваем с координатами
+    h ^= static_cast<uint64_t>(x) * 0x9e3779b97f4a7c15ULL;
+    h ^= static_cast<uint64_t>(y) * 0xbf58476d1ce4e5b9ULL;
+    // дополнительное перемешивание
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
     return (h % m_difficulty) == 0;
 }
 

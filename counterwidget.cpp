@@ -4,7 +4,7 @@
 CounterWidget::CounterWidget(int numDigits, const QVector<QPixmap> &digitSprites, QWidget *parent)
     : QWidget(parent), m_numDigits(numDigits), m_digits(digitSprites)
 {
-    setFixedSize(numDigits * 26, 46);
+    setFixedSize(numDigits * 13, 23);
     m_value = QString(numDigits, ' ');
 }
 
@@ -36,7 +36,7 @@ void CounterWidget::paintEvent(QPaintEvent *) {
         else if (ch >= '0' && ch <= '9') idx = 13 - (ch.unicode() - '0');
         else idx = 3;
 
-        QRectF target(i * 26, 0, 26, 46);
+        QRectF target(i * 13, 0, 13, 23);
         p.drawPixmap(target, m_digits.at(idx), QRectF(0,0,13,23));
     }
 }

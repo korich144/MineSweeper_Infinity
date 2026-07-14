@@ -7,6 +7,10 @@
 #include <QPixmap>
 #include <QThread>
 #include <QLabel>
+#include <QColor>
+#include <QListView>
+#include <QStringListModel>
+#include <qpushbutton.h>
 
 class WorldManager;
 class Solver;
@@ -46,6 +50,14 @@ private slots:
     void onMouseCellChanged(int64_t x, int64_t y);
     void restoreCamera();
 
+    // Настройки
+    void onDifficultyTextChanged(const QString &text);
+    void onSeedTextChanged(const QString &text);
+    void onThemeChanged(const QString &theme);
+    void onRegenerateWorld();
+    void onLoadWorld();
+    void onOverlayClose();
+
 signals:
     void requestSave();
 
@@ -56,6 +68,11 @@ private:
     void stopEngine();
     void saveSettings();
     void setupOverlay();
+    void applyTheme();                     // применяет QSS и рамки
+    void loadThemeColors();                // из последней строки спрайтлиста
+    void updateWorldList();                // заполняет список миров
+    void saveCurrentWorld();               // сохраняет текущий мир в файл
+    void hideWarningLabels();              // скрывает все предупреждения
 
     Ui::MainWindow *ui;
     MinefieldWidget *m_field;
@@ -86,12 +103,28 @@ private:
 
     QVector<QPixmap> m_digitSprites;
     QVector<QPixmap> m_smileSprites;
+    QVector<QColor> m_themeColors;        // цвета из спрайтлиста
     CounterWidget *m_scoreWidget = nullptr;
     CounterWidget *m_timeWidget = nullptr;
+    QFrame *m_scoreFrame = nullptr;
+    QFrame *m_timeFrame = nullptr;
 
     QLabel *m_coordLabel = nullptr;
 
+    // Overlay elements
     QFrame *m_overlay = nullptr;
+    QLineEdit *m_diffEdit = nullptr;
+    QLineEdit *m_seedEdit = nullptr;
+    QComboBox *m_themeCombo = nullptr;
+    QLabel *m_warnDiff = nullptr;
+    QLabel *m_warnSeed = nullptr;
+    QListView *m_worldListView = nullptr;
+    QStringListModel *m_worldListModel = nullptr;
+    QPushButton *m_loadWorldBtn = nullptr;
+    QPushButton *m_regenerateBtn = nullptr;
+
+    bool m_diffChanged = false;
+    bool m_seedChanged = false;
 };
 
 #endif // MAINWINDOW_H

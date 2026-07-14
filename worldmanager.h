@@ -15,7 +15,7 @@ class WorldManager : public QObject
 public:
     explicit WorldManager(const QString &seed, int difficulty, QObject *parent = nullptr);
 
-    void setSeed(const QString &seed) { m_seed = seed; }
+    void setSeed(const QString &seed);
     QString seed() const { return m_seed; }
     int difficulty() const { return m_difficulty; }
 
@@ -70,6 +70,9 @@ private:
     QString m_seed;
     int m_difficulty;
     bool m_gameActive = true;
+
+    uint64_t m_hash = 0;
+    void computeHash();
 };
 
 #endif // WORLDMANAGER_H

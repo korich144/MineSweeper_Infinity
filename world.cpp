@@ -47,6 +47,10 @@ void World::save(const QString &worldPath, const WorldInfo &info) {
 }
 
 QString World::generateSeed() {
-    quint64 v = QRandomGenerator::global()->generate64();
-    return QString::number(v, 16).rightJustified(16, '0');
+    QString seed;
+    for (int i = 0; i < 32; ++i) {
+        int r = QRandomGenerator::global()->bounded(16);
+        seed += QString::number(r, 16);
+    }
+    return seed;
 }

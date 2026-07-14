@@ -22,6 +22,11 @@
 #include <QDateTime>
 #include <QKeyEvent>
 #include <QCloseEvent>
+#include <QListView>
+#include <QStringListModel>
+#include <QPainter>
+#include <QApplication>
+#include <QStyle>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -77,34 +82,35 @@ MainWindow::MainWindow(QWidget *parent)
     startEngine();
 
     // спрайты темы
-    QString theme = Settings::instance().theme;
-    QString themePath = QString(":/themes/%1.bmp").arg(theme);
-    QPixmap sheet(themePath);
-    if (sheet.isNull()) sheet.load("sprites/" + theme + ".bmp");
-    if (!sheet.isNull()) {
-        m_digitSprites.clear();
-        for (int i = 0; i < 14; ++i)
-            m_digitSprites.append(sheet.copy(i * 13, 16, 13, 23));
-
-        m_smileSprites.clear();
-        for (int i = 0; i < 5; ++i) {
-            QPixmap sp = sheet.copy(i * 24, 39, 24, 24);
-            QPixmap scaled = sp.scaled(48, 48, Qt::KeepAspectRatio, Qt::FastTransformation);
-            m_smileSprites.append(scaled);
-        }
-        ui->smileButton->setIcon(QIcon(m_smileSprites[4]));
-        ui->smileButton->setIconSize(QSize(48, 48));
-    }
-    m_field->setTheme(theme);
+    loadThemeColors();
+    applyTheme();
 
     m_scoreWidget = new CounterWidget(6, m_digitSprites, ui->frameHeader);
     m_timeWidget = new CounterWidget(8, m_digitSprites, ui->frameHeader);
-    ui->frameHeader->layout()->replaceWidget(ui->scoreLabel, m_scoreWidget);
-    ui->frameHeader->layout()->replaceWidget(ui->timeLabel, m_timeWidget);
+    m_scoreFrame = new QFrame(ui->frameHeader);
+    m_scoreFrame->setFrameStyle(QFrame::Panel | QFrame::Sunken);
+    m_scoreFrame->setLineWidth(1);
+    QVBoxLayout *scoreLay = new QVBoxLayout(m_scoreFrame);
+    scoreLay->setContentsMargins(2,2,2,2);
+    scoreLay->addWidget(m_scoreWidget);
+
+    m_timeFrame = new QFrame(ui->frameHeader);
+    m_timeFrame->setFrameStyle(QFrame::Panel | QFrame::Sunken);
+    m_timeFrame->setLineWidth(1);
+    QVBoxLayout *timeLay = new QVBoxLayout(m_timeFrame);
+    timeLay->setContentsMargins(2,2,2,2);
+    timeLay->addWidget(m_timeWidget);
+
+    ui->frameHeader->layout()->replaceWidget(ui->scoreLabel, m_scoreFrame);
+    ui->frameHeader->layout()->replaceWidget(ui->timeLabel, m_timeFrame);
     delete ui->scoreLabel;
     delete ui->timeLabel;
     m_scoreWidget->setValue("      ");
     m_timeWidget->setValue("00:00:00");
+
+    // стили для счётчиков (рамка 1px sunken)
+    m_scoreWidget->setStyleSheet("border: 1px inset gray; background: palette(base);");
+    m_timeWidget->setStyleSheet("border: 1px inset gray; background: palette(base);");
 
     QTimer *uiTimer = new QTimer(this);
     connect(uiTimer, &QTimer::timeout, this, &MainWindow::updateCounters);
@@ -118,6 +124,101 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow() {
     stopEngine();
     delete ui;
+}
+
+// В функции loadThemeColors:
+void MainWindow::loadThemeColors() {
+    m_themeColors.clear();
+    QString theme = Settings::instance().theme;
+    QString path = QString(":/themes/%1.bmp").arg(theme);
+    QPixmap sheet(path);
+    if (sheet.isNull()) {
+        sheet.load("sprites/" + theme + ".bmp");
+    }
+    if (sheet.isNull()) {
+        qWarning() << "Cannot load theme for colors:" << theme;
+        return;
+    }
+    QImage img = sheet.toImage();
+    if (img.height() <= 63) return;
+    for (int x = 0; x < qMin(16, img.width()); ++x) {
+        m_themeColors.append(img.pixelColor(x, 63));
+    }
+    // дополняем
+    while (m_themeColors.size() < 16) {
+        m_themeColors.append(Qt::gray);
+    }
+}
+
+void MainWindow::applyTheme() {
+    // Загружаем спрайты для счётчиков и смайликов (как было)
+    QString theme = Settings::instance().theme;
+    QString path = QString(":/themes/%1.bmp").arg(theme);
+    QPixmap sheet(path);
+    if (sheet.isNull()) sheet.load("sprites/" + theme + ".bmp");
+    if (!sheet.isNull()) {
+        m_digitSprites.clear();
+        for (int i = 0; i < 14; ++i)
+            m_digitSprites.append(sheet.copy(i * 13, 16, 13, 23));
+
+        m_smileSprites.clear();
+        for (int i = 0; i < 5; ++i) {
+            QPixmap sp = sheet.copy(i * 24, 39, 24, 24);
+            m_smileSprites.append(sp);
+        }
+        ui->smileButton->setIcon(QIcon(m_smileSprites[4]));
+        ui->smileButton->setIconSize(QSize(24, 24));
+    }
+    m_field->setTheme(theme);
+
+    // Обновляем цвета счётчиков
+    if (m_scoreWidget) {
+        m_scoreWidget->setSprite(m_digitSprites);
+        m_scoreWidget->update();
+    }
+    if (m_timeWidget) {
+        m_timeWidget->setSprite(m_digitSprites);
+        m_timeWidget->update();
+    }
+
+    // Применяем стили XP
+    // frameHeader – 2px raised
+    ui->frameHeader->setFrameStyle(QFrame::Panel | QFrame::Raised);
+    ui->frameHeader->setLineWidth(2);
+    ui->frameHeader->setMidLineWidth(0);
+
+    // frameField – 3px sunken
+    ui->frameField->setFrameStyle(QFrame::Panel | QFrame::Sunken);
+    ui->frameField->setLineWidth(3);
+    ui->frameField->setMidLineWidth(0);
+
+    // Цвета из m_themeColors (если есть)
+    if (m_themeColors.size() >= 8) {
+        QColor bg = m_themeColors[0];
+        QColor panelBg = m_themeColors[1];
+        QColor textColor = m_themeColors[2];
+        QColor lightBorder = m_themeColors[4];
+        QColor darkBorder = m_themeColors[5];
+        QColor fieldBg = m_themeColors[6];
+
+        QString style = QString(
+                            "QMainWindow { background-color: %1; }"
+                            "QFrame#frameHeader { background-color: %2; }"
+                            "QFrame#frameField { background-color: %3; }"
+                            ).arg(bg.name(), panelBg.name(), fieldBg.name());
+
+        // Можно добавить стили для других элементов
+        this->setStyleSheet(style);
+    }
+
+    // Обновляем overlay, если открыт
+    if (m_overlay && m_overlay->isVisible()) {
+        // обновим цвета градиента и т.д. (см. setupOverlay)
+        // для простоты пересоздадим overlay
+        m_overlay->deleteLater();
+        m_overlay = nullptr;
+        setupOverlay();
+    }
 }
 
 void MainWindow::startEngine() {
@@ -263,6 +364,21 @@ void MainWindow::loadWorld(const QString &worldPath) {
     m_restoreCellY = info.lastViewY;
 }
 
+void MainWindow::saveCurrentWorld() {
+    if (m_wm && !m_currentWorldDir.isEmpty()) {
+        WorldInfo info = World::load(m_currentWorldDir);
+        QPointF center = m_field->screenToCell(m_field->rect().center());
+        info.lastViewX = static_cast<qint64>(qFloor(center.x()));
+        info.lastViewY = static_cast<qint64>(qFloor(center.y()));
+        info.lastScale = m_field->scale();
+        info.score = m_score;
+        info.elapsed = m_elapsedOffset + (m_gameTimer.isValid() ? m_gameTimer.elapsed() : 0);
+        info.gameActive = m_wm->isGameActive() && m_gameStarted;
+        info.flagsPlaced = m_flagsPlaced;
+        World::save(m_currentWorldDir, info);
+    }
+}
+
 void MainWindow::saveSettings() {
     QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/settings.ini";
     Settings::instance().save(path);
@@ -316,7 +432,7 @@ void MainWindow::updateCounters() {
             ui->smileButton->setIcon(QIcon(m_smileSprites[4]));
     }
 
-    m_field->update();   // принудительная перерисовка поля
+    m_field->update();
 }
 
 void MainWindow::onCellsOpened(int count) {
@@ -360,8 +476,31 @@ void MainWindow::onSmileReleased() {
 }
 
 void MainWindow::onSmileClicked() {
-    m_restartAfterSave = true;
-    emit requestSave();
+    // При нажатии смайлика перезапускаем с новой сложностью (из поля, если открыто) и случайным сидом
+    int diff = Settings::instance().difficulty;
+    if (m_overlay && m_overlay->isVisible() && m_diffEdit) {
+        bool ok;
+        int val = m_diffEdit->text().toInt(&ok);
+        if (ok && val > 0) diff = val;
+    }
+    // генерируем случайный сид
+    QString newSeed = World::generateSeed();
+    // сохраняем текущий мир
+    saveCurrentWorld();
+    // создаём новый мир
+    stopEngine();
+    if (m_wm) {
+        m_wm->deleteLater();
+        m_wm = nullptr;
+    }
+    initNewWorld(newSeed, false);
+    startEngine();
+    // если overlay открыт, обновим поле сида
+    if (m_overlay && m_overlay->isVisible() && m_seedEdit) {
+        m_seedEdit->setText(newSeed);
+        m_seedChanged = false;
+        hideWarningLabels();
+    }
 }
 
 void MainWindow::onSaveFinished() {
@@ -372,8 +511,20 @@ void MainWindow::onSaveFinished() {
             m_wm->deleteLater();
             m_wm = nullptr;
         }
-        initNewWorld(World::generateSeed(), true);
+        // Используем текущие настройки из overlay (если открыт) или из Settings
+        int diff = Settings::instance().difficulty;
+        QString seed = World::generateSeed();
+        if (m_overlay && m_overlay->isVisible()) {
+            bool ok;
+            int val = m_diffEdit->text().toInt(&ok);
+            if (ok && val > 0) diff = val;
+            seed = m_seedEdit->text().trimmed();
+            if (seed.isEmpty()) seed = World::generateSeed();
+        }
+        // создаём новый мир с этими параметрами
+        initNewWorld(seed, true);
         startEngine();
+        hideWarningLabels();
     }
 }
 
@@ -382,18 +533,7 @@ void MainWindow::showSaveIndicator() {
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
-    if (m_wm && !m_currentWorldDir.isEmpty()) {
-        WorldInfo info = World::load(m_currentWorldDir);
-        QPointF center = m_field->screenToCell(m_field->rect().center());
-        info.lastViewX = static_cast<qint64>(qFloor(center.x()));
-        info.lastViewY = static_cast<qint64>(qFloor(center.y()));
-        info.lastScale = m_field->scale();
-        info.score = m_score;
-        info.elapsed = m_elapsedOffset + (m_gameTimer.isValid() ? m_gameTimer.elapsed() : 0);
-        info.gameActive = m_wm->isGameActive() && m_gameStarted;
-        info.flagsPlaced = m_flagsPlaced;
-        World::save(m_currentWorldDir, info);
-    }
+    saveCurrentWorld();
 
     Settings::instance().windowSize = size();
     Settings::instance().maximized = isMaximized();
@@ -416,71 +556,305 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
     QMainWindow::keyPressEvent(event);
 }
 
+// -------------------- Overlay --------------------
+// В setupOverlay() – переделано окно параметров
 void MainWindow::setupOverlay() {
-    m_overlay = new QFrame(this);   // родитель – главное окно
+    if (m_overlay) {
+        m_overlay->raise();
+        m_overlay->show();
+        return;
+    }
+
+    m_overlay = new QFrame(this);
     m_overlay->setStyleSheet("background-color: rgba(0,0,0,150);");
     m_overlay->setGeometry(rect());
     m_overlay->show();
     m_overlay->raise();
 
-    QFrame *frame = new QFrame(m_overlay);
-    frame->setStyleSheet("background: white; border: 2px solid gray;");
-    frame->setFixedSize(400, 320);
-    frame->move((width() - 400) / 2, (height() - 320) / 2);
-    frame->show();
-    frame->raise();
+    // Главная рамка – выпуклая
+    QFrame *mainFrame = new QFrame(m_overlay);
+    mainFrame->setFrameStyle(QFrame::Panel | QFrame::Raised);
+    mainFrame->setLineWidth(2);
+    QColor bgColor = m_themeColors.size() > 0 ? m_themeColors[0] : palette().window().color();
+    mainFrame->setStyleSheet(QString("background-color: %1;").arg(bgColor.name()));
+    mainFrame->setFixedSize(650, 350);
+    mainFrame->move((width() - 650) / 2, (height() - 350) / 2);
+    mainFrame->show();
+    mainFrame->raise();
 
-    QVBoxLayout *vlay = new QVBoxLayout(frame);
+    QVBoxLayout *mainLayout = new QVBoxLayout(mainFrame);
+    mainLayout->setContentsMargins(0,0,0,0);
+    mainLayout->setSpacing(0);
 
-    vlay->addWidget(new QLabel("Сложность (частота):", frame));
-    QLineEdit *diffEdit = new QLineEdit(QString::number(Settings::instance().difficulty), frame);
-    vlay->addWidget(diffEdit);
-    QLabel *diffHint = new QLabel("Изменения вступят в силу только после перезапуска.", frame);
-    diffHint->setStyleSheet("color: red;");
-    vlay->addWidget(diffHint);
+    // Верхняя панель с градиентом
+    QFrame *titleFrame = new QFrame(mainFrame);
+    titleFrame->setMaximumHeight(24);
+    titleFrame->setFrameStyle(QFrame::StyledPanel | QFrame::Raised);
+    QColor gradStart = m_themeColors.size() > 8 ? m_themeColors[8] : QColor(0,0,128);
+    QColor gradEnd = m_themeColors.size() > 9 ? m_themeColors[9] : QColor(100,149,237);
+    QString gradStyle = QString("QFrame { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 %1, stop:1 %2); }")
+                            .arg(gradStart.name(), gradEnd.name());
+    titleFrame->setStyleSheet(gradStyle);
+    QHBoxLayout *titleLayout = new QHBoxLayout(titleFrame);
+    titleLayout->setContentsMargins(8,2,2,2);
+    titleLayout->setSpacing(0);
 
-    vlay->addWidget(new QLabel("Сид текущего мира:", frame));
-    QLineEdit *seedEdit = new QLineEdit(m_currentSeed, frame);
-    vlay->addWidget(seedEdit);
-    QLabel *seedHint = new QLabel("Сид будет использован при следующем создании мира.", frame);
-    vlay->addWidget(seedHint);
+    QLabel *titleLabel = new QLabel("Параметры", titleFrame);
+    titleLabel->setStyleSheet("color: white; font-weight: bold; background: transparent;");
+    titleLayout->addWidget(titleLabel);
 
-    vlay->addWidget(new QLabel("Тема:", frame));
-    QComboBox *themeCombo = new QComboBox(frame);
-    themeCombo->addItem("light");
-    themeCombo->addItem("dark");
-    themeCombo->setCurrentText(Settings::instance().theme);
-    vlay->addWidget(themeCombo);
+    titleLayout->addStretch();
 
-    QHBoxLayout *worldLay = new QHBoxLayout();
-    QLineEdit *worldEdit = new QLineEdit(Settings::instance().lastWorld, frame);
-    worldEdit->setReadOnly(true);
-    QPushButton *browseBtn = new QPushButton("Обзор...", frame);
-    worldLay->addWidget(worldEdit);
-    worldLay->addWidget(browseBtn);
-    vlay->addLayout(worldLay);
+    // Кнопка закрытия со спрайтами
+    QPushButton *closeBtn = new QPushButton(titleFrame);
+    closeBtn->setFixedSize(16, 14);
+    // загружаем спрайты из той же темы
+    QString theme = Settings::instance().theme;
+    QString path = QString(":/themes/%1.bmp").arg(theme);
+    QPixmap sheet(path);
+    if (sheet.isNull()) sheet.load("sprites/" + theme + ".bmp");
+    if (!sheet.isNull()) {
+        QPixmap normal = sheet.copy(120, 39, 16, 14);
+        QPixmap pressed = sheet.copy(136, 39, 16, 14);
+        QIcon icon;
+        icon.addPixmap(normal, QIcon::Normal);
+        icon.addPixmap(pressed, QIcon::Active);
+        icon.addPixmap(pressed, QIcon::Selected);
+        closeBtn->setIcon(icon);
+        closeBtn->setIconSize(QSize(16,14));
+    }
+    closeBtn->setStyleSheet("border: none; background: transparent;");
+    connect(closeBtn, &QPushButton::clicked, this, &MainWindow::onOverlayClose);
+    titleLayout->addWidget(closeBtn);
 
-    QPushButton *closeBtn = new QPushButton("Закрыть", frame);
-    vlay->addWidget(closeBtn);
+    mainLayout->addWidget(titleFrame);
 
-    connect(browseBtn, &QPushButton::clicked, [this, worldEdit]() {
-        QString dir = QFileDialog::getExistingDirectory(this, "Выберите мир",
-                                                        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/worlds");
-        if (!dir.isEmpty()) {
-            worldEdit->setText(QDir(dir).dirName());
-        }
-    });
+    // Содержимое – без отступов
+    QFrame *contentFrame = new QFrame(mainFrame);
+    contentFrame->setFrameStyle(QFrame::NoFrame);
+    QHBoxLayout *contentLayout = new QHBoxLayout(contentFrame);
+    contentLayout->setContentsMargins(0,0,0,0);
+    contentLayout->setSpacing(0);   // плотно
 
-    connect(closeBtn, &QPushButton::clicked, [this, diffEdit, seedEdit, themeCombo, worldEdit]() {
-        Settings::instance().difficulty = diffEdit->text().toInt();
-        Settings::instance().theme = themeCombo->currentText();
-        m_currentSeed = seedEdit->text();
-        QString newWorld = worldEdit->text().trimmed();
-        if (!newWorld.isEmpty() && newWorld != Settings::instance().lastWorld) {
-            Settings::instance().lastWorld = newWorld;
-            saveSettings();
-        }
+    // Левая колонка (настройки)
+    QFrame *leftCol = new QFrame(contentFrame);
+    leftCol->setFrameStyle(QFrame::NoFrame);
+    QVBoxLayout *leftLayout = new QVBoxLayout(leftCol);
+    leftLayout->setContentsMargins(10,10,10,10);
+    leftLayout->setSpacing(8);
+
+    // Сложность
+    QHBoxLayout *diffLayout = new QHBoxLayout();
+    QLabel *diffLabel = new QLabel("Сложность", leftCol);
+    diffLabel->setStyleSheet("background: transparent; border: none;");
+    diffLabel->setFixedWidth(80);
+    m_diffEdit = new QLineEdit(leftCol);
+    m_diffEdit->setText(QString::number(Settings::instance().difficulty));
+    m_diffEdit->setStyleSheet("border: 1px inset gray; background: white;");
+    connect(m_diffEdit, &QLineEdit::textChanged, this, &MainWindow::onDifficultyTextChanged);
+    diffLayout->addWidget(diffLabel);
+    diffLayout->addWidget(m_diffEdit);
+    leftLayout->addLayout(diffLayout);
+
+    m_warnDiff = new QLabel("⚠ Изменения вступят в силу только для следующего мира", leftCol);
+    m_warnDiff->setStyleSheet("color: red; font-size: 8pt; background: transparent; border: none;");
+    m_warnDiff->setVisible(false);
+    leftLayout->addWidget(m_warnDiff);
+
+    // Сид
+    QHBoxLayout *seedLayout = new QHBoxLayout();
+    QLabel *seedLabel = new QLabel("Сид мира", leftCol);
+    seedLabel->setStyleSheet("background: transparent; border: none;");
+    seedLabel->setFixedWidth(80);
+    m_seedEdit = new QLineEdit(leftCol);
+    m_seedEdit->setText(m_currentSeed);
+    m_seedEdit->setStyleSheet("border: 1px inset gray; background: white;");
+    connect(m_seedEdit, &QLineEdit::textChanged, this, &MainWindow::onSeedTextChanged);
+    seedLayout->addWidget(seedLabel);
+    seedLayout->addWidget(m_seedEdit);
+    leftLayout->addLayout(seedLayout);
+
+    m_warnSeed = new QLabel("⚠ Изменения вступят в силу только для следующего мира", leftCol);
+    m_warnSeed->setStyleSheet("color: red; font-size: 8pt; background: transparent; border: none;");
+    m_warnSeed->setVisible(false);
+    leftLayout->addWidget(m_warnSeed);
+
+    // Тема
+    QHBoxLayout *themeLayout = new QHBoxLayout();
+    QLabel *themeLabel = new QLabel("Тема", leftCol);
+    themeLabel->setStyleSheet("background: transparent; border: none;");
+    themeLabel->setFixedWidth(80);
+    m_themeCombo = new QComboBox(leftCol);
+    m_themeCombo->addItem("light");
+    m_themeCombo->addItem("dark");
+    m_themeCombo->setCurrentText(Settings::instance().theme);
+    m_themeCombo->setStyleSheet("border: 1px inset gray; background: white;");
+    connect(m_themeCombo, &QComboBox::currentTextChanged, this, &MainWindow::onThemeChanged);
+    themeLayout->addWidget(themeLabel);
+    themeLayout->addWidget(m_themeCombo);
+    leftLayout->addLayout(themeLayout);
+
+    leftLayout->addStretch();
+
+    m_regenerateBtn = new QPushButton("Пересоздать мир", leftCol);
+    m_regenerateBtn->setStyleSheet("border: 2px outset gray; background: lightgray;");
+    connect(m_regenerateBtn, &QPushButton::clicked, this, &MainWindow::onRegenerateWorld);
+    leftLayout->addWidget(m_regenerateBtn);
+
+    contentLayout->addWidget(leftCol, 2);
+
+    // Правая колонка (миры)
+    QFrame *rightCol = new QFrame(contentFrame);
+    rightCol->setFrameStyle(QFrame::NoFrame);
+    QVBoxLayout *rightLayout = new QVBoxLayout(rightCol);
+    rightLayout->setContentsMargins(10,10,10,10);
+    rightLayout->setSpacing(8);
+
+    QLabel *worldsLabel = new QLabel("Миры", rightCol);
+    worldsLabel->setStyleSheet("background: transparent; border: none;");
+    rightLayout->addWidget(worldsLabel);
+
+    m_worldListView = new QListView(rightCol);
+    m_worldListModel = new QStringListModel(this);
+    m_worldListView->setModel(m_worldListModel);
+    m_worldListView->setStyleSheet("border: 1px inset gray; background: white;");
+    rightLayout->addWidget(m_worldListView);
+
+    m_loadWorldBtn = new QPushButton("Загрузить", rightCol);
+    m_loadWorldBtn->setStyleSheet("border: 2px outset gray; background: lightgray;");
+    connect(m_loadWorldBtn, &QPushButton::clicked, this, &MainWindow::onLoadWorld);
+    rightLayout->addWidget(m_loadWorldBtn);
+
+    contentLayout->addWidget(rightCol, 1);
+
+    mainLayout->addWidget(contentFrame);
+
+    // ... остальное (список миров, скрытие предупреждений)
+    updateWorldList();
+    hideWarningLabels();
+    m_diffChanged = false;
+    m_seedChanged = false;
+}
+
+void MainWindow::onOverlayClose() {
+    if (m_overlay) {
         m_overlay->deleteLater();
         m_overlay = nullptr;
-    });
+    }
+}
+
+void MainWindow::onDifficultyTextChanged(const QString &text) {
+    bool ok;
+    int val = text.toInt(&ok);
+    if (ok && val > 0) {
+        m_diffChanged = true;
+        m_warnDiff->setVisible(true);
+    } else {
+        m_warnDiff->setVisible(false);
+        m_diffChanged = false;
+    }
+}
+
+void MainWindow::onSeedTextChanged(const QString &text) {
+    if (text != m_currentSeed) {
+        m_seedChanged = true;
+        m_warnSeed->setVisible(true);
+    } else {
+        m_seedChanged = false;
+        m_warnSeed->setVisible(false);
+    }
+}
+
+void MainWindow::onThemeChanged(const QString &theme) {
+    Settings::instance().theme = theme;
+    saveSettings();
+    loadThemeColors();
+    applyTheme();
+    // тема применяется сразу
+}
+
+void MainWindow::onRegenerateWorld() {
+    // Сохраняем текущий мир
+    saveCurrentWorld();
+
+    // Читаем сложность и сид из полей
+    bool ok;
+    int diff = m_diffEdit->text().toInt(&ok);
+    if (!ok || diff <= 0) diff = Settings::instance().difficulty;
+    QString seed = m_seedEdit->text().trimmed();
+    if (seed.isEmpty()) seed = World::generateSeed();
+
+    // Применяем сложность в настройки
+    Settings::instance().difficulty = diff;
+    saveSettings();
+
+    // Пересоздаём мир
+    stopEngine();
+    if (m_wm) {
+        m_wm->deleteLater();
+        m_wm = nullptr;
+    }
+    initNewWorld(seed, true);
+    startEngine();
+
+    // Обновляем список миров (может появиться новая папка)
+    updateWorldList();
+
+    // Скрываем предупреждения
+    hideWarningLabels();
+    m_diffChanged = false;
+    m_seedChanged = false;
+}
+
+void MainWindow::onLoadWorld() {
+    QModelIndex idx = m_worldListView->currentIndex();
+    if (!idx.isValid()) return;
+    QString folder = m_worldListModel->data(idx, Qt::DisplayRole).toString();
+    if (folder.isEmpty()) return;
+
+    QString worldsDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/worlds";
+    QString worldPath = worldsDir + "/" + folder;
+    if (!QDir(worldPath).exists()) return;
+
+    // Сохраняем текущий мир
+    saveCurrentWorld();
+
+    // Загружаем выбранный
+    loadWorld(worldPath);
+    startEngine();
+
+    // Обновляем настройки
+    Settings::instance().lastWorld = folder;
+    saveSettings();
+
+    // Обновляем поле сида в overlay
+    if (m_seedEdit) {
+        m_seedEdit->setText(m_currentSeed);
+        m_seedChanged = false;
+    }
+    hideWarningLabels();
+
+    // Обновляем список и выделение
+    updateWorldList();
+}
+
+void MainWindow::updateWorldList() {
+    QString worldsDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/worlds";
+    QDir dir(worldsDir);
+    QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    m_worldListModel->setStringList(dirs);
+
+    // Выделяем текущий мир
+    QString current = Settings::instance().lastWorld;
+    if (!current.isEmpty()) {
+        int row = dirs.indexOf(current);
+        if (row >= 0) {
+            m_worldListView->setCurrentIndex(m_worldListModel->index(row));
+        }
+    }
+}
+
+void MainWindow::hideWarningLabels() {
+    if (m_warnDiff) m_warnDiff->setVisible(false);
+    if (m_warnSeed) m_warnSeed->setVisible(false);
 }
