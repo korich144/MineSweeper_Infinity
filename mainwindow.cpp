@@ -85,28 +85,28 @@ MainWindow::MainWindow(QWidget *parent)
     loadThemeColors();
     applyTheme();
 
-    m_scoreWidget = new CounterWidget(6, m_digitSprites, ui->frameHeader);
-    m_timeWidget = new CounterWidget(8, m_digitSprites, ui->frameHeader);
+    m_scoreWidget = new CounterWidget(m_digitSprites, ui->frameHeader);
+    m_timeWidget = new CounterWidget(m_digitSprites, ui->frameHeader);
+    m_scoreWidget->setValue("  0");
+    m_timeWidget->setValue("000");
     m_scoreFrame = new QFrame(ui->frameHeader);
     m_scoreFrame->setFrameStyle(QFrame::Panel | QFrame::Sunken);
     m_scoreFrame->setLineWidth(1);
     QVBoxLayout *scoreLay = new QVBoxLayout(m_scoreFrame);
-    scoreLay->setContentsMargins(2,2,2,2);
+    scoreLay->setContentsMargins(0,0,0,0);
     scoreLay->addWidget(m_scoreWidget);
 
     m_timeFrame = new QFrame(ui->frameHeader);
     m_timeFrame->setFrameStyle(QFrame::Panel | QFrame::Sunken);
     m_timeFrame->setLineWidth(1);
     QVBoxLayout *timeLay = new QVBoxLayout(m_timeFrame);
-    timeLay->setContentsMargins(2,2,2,2);
+    timeLay->setContentsMargins(0,0,0,0);
     timeLay->addWidget(m_timeWidget);
 
     ui->frameHeader->layout()->replaceWidget(ui->scoreLabel, m_scoreFrame);
     ui->frameHeader->layout()->replaceWidget(ui->timeLabel, m_timeFrame);
     delete ui->scoreLabel;
     delete ui->timeLabel;
-    m_scoreWidget->setValue("      ");
-    m_timeWidget->setValue("00:00:00");
 
     // стили для счётчиков (рамка 1px sunken)
     m_scoreWidget->setStyleSheet("border: 1px inset gray; background: palette(base);");
@@ -183,13 +183,13 @@ void MainWindow::applyTheme() {
 
     // Применяем стили XP
     // frameHeader – 2px raised
-    ui->frameHeader->setFrameStyle(QFrame::Panel | QFrame::Raised);
+    ui->frameHeader->setFrameStyle(QFrame::Panel | QFrame::Sunken);
     ui->frameHeader->setLineWidth(2);
     ui->frameHeader->setMidLineWidth(0);
 
     // frameField – 3px sunken
     ui->frameField->setFrameStyle(QFrame::Panel | QFrame::Sunken);
-    ui->frameField->setLineWidth(3);
+    ui->frameField->setLineWidth(4);
     ui->frameField->setMidLineWidth(0);
 
     // Цвета из m_themeColors (если есть)
@@ -394,30 +394,47 @@ void MainWindow::onFirstClick() {
 void MainWindow::updateCounters() {
     if (!m_wm) return;
 
-    // время
+    // --- Время ---
     QString timeStr;
+    qint64 ms = 0;
     if (m_gameStarted && m_wm->isGameActive()) {
-        qint64 ms = m_elapsedOffset + m_gameTimer.elapsed();
-        int h = ms / 3600000;
-        int m = (ms % 3600000) / 60000;
-        int s = (ms % 60000) / 1000;
-        timeStr = QString("%1:%2:%3").arg(h,2,10,QChar('0')).arg(m,2,10,QChar('0')).arg(s,2,10,QChar('0'));
+        ms = m_elapsedOffset + m_gameTimer.elapsed();
     } else {
-        if (m_gameStarted && !m_wm->isGameActive()) {
-            m_elapsedOffset += m_gameTimer.elapsed();
-            m_gameTimer.invalidate();
-            m_gameStarted = false;
-            m_gamePaused = true;
-        }
-        qint64 ms = m_elapsedOffset;
-        int h = ms / 3600000;
-        int m = (ms % 3600000) / 60000;
-        int s = (ms % 60000) / 1000;
-        timeStr = QString("%1:%2:%3").arg(h,2,10,QChar('0')).arg(m,2,10,QChar('0')).arg(s,2,10,QChar('0'));
+        ms = m_elapsedOffset;
+    }
+    int totalSeconds = ms / 1000;
+
+    if (totalSeconds < 60) {
+        timeStr = QString("%1").arg(totalSeconds, 3, 10, QChar('0'));
+    } else if (totalSeconds < 3600) {
+        int mins = totalSeconds / 60;
+        int secs = totalSeconds % 60;
+        timeStr = QString("%1:%2").arg(mins, 2, 10, QChar('0')).arg(secs, 2, 10, QChar('0'));
+    } else if (totalSeconds < 86400) {
+        int hours = totalSeconds / 3600;
+        int mins = (totalSeconds % 3600) / 60;
+        int secs = totalSeconds % 60;
+        timeStr = QString("%1:%2:%3").arg(hours, 2, 10, QChar('0')).arg(mins, 2, 10, QChar('0')).arg(secs, 2, 10, QChar('0'));
+    } else {
+        int days = totalSeconds / 86400;
+        int rem = totalSeconds % 86400;
+        int hours = rem / 3600;
+        int mins = (rem % 3600) / 60;
+        int secs = rem % 60;
+        timeStr = QString("%1:%2:%3:%4").arg(days).arg(hours, 2, 10, QChar('0'))
+                      .arg(mins, 2, 10, QChar('0')).arg(secs, 2, 10, QChar('0'));
     }
     m_timeWidget->setValue(timeStr);
 
-    m_scoreWidget->setValue(QString::number(m_score).rightJustified(6, ' '));
+    // --- Очки ---
+    qint64 score = m_score;
+    QString scoreStr;
+    if (score < 1000) {
+        scoreStr = QString("%1").arg(score, 3, 10, QChar(' '));
+    } else {
+        scoreStr = QString::number(score);
+    }
+    m_scoreWidget->setValue(scoreStr);
 
     int opened, flagged;
     m_wm->countStats(opened, flagged);

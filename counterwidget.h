@@ -9,8 +9,7 @@ class CounterWidget : public QWidget
 {
     Q_OBJECT
 public:
-    explicit CounterWidget(int numDigits, const QVector<QPixmap> &digitSprites,
-                           QWidget *parent = nullptr);
+    explicit CounterWidget(const QVector<QPixmap> &digitSprites, QWidget *parent = nullptr);
 
     void setValue(const QString &text);
     void setSprite(const QVector<QPixmap> &sprites);
@@ -19,9 +18,11 @@ protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
-    int m_numDigits;
+    void updateSize();
+
     QVector<QPixmap> m_digits;   // 14 items
     QString m_value;
+    int m_numDigits = 0;
 };
 
 #endif // COUNTERWIDGET_H

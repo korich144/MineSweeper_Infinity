@@ -1,16 +1,16 @@
 #include "counterwidget.h"
 #include <QPainter>
 
-CounterWidget::CounterWidget(int numDigits, const QVector<QPixmap> &digitSprites, QWidget *parent)
-    : QWidget(parent), m_numDigits(numDigits), m_digits(digitSprites)
+CounterWidget::CounterWidget(const QVector<QPixmap> &digitSprites, QWidget *parent)
+    : QWidget(parent), m_digits(digitSprites)
 {
-    setFixedSize(numDigits * 13, 23);
-    m_value = QString(numDigits, ' ');
+    setValue(" ");
 }
 
 void CounterWidget::setValue(const QString &text) {
-    if (text.size() == m_numDigits) {
+    if (m_value != text) {
         m_value = text;
+        updateSize();
         update();
     }
 }
@@ -20,13 +20,20 @@ void CounterWidget::setSprite(const QVector<QPixmap> &sprites) {
     update();
 }
 
+void CounterWidget::updateSize() {
+    int len = m_value.length();
+    if (len < 1) len = 1;
+    setFixedSize(len * 13, 23);
+    m_numDigits = len;
+}
+
 void CounterWidget::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::SmoothPixmapTransform, false);
 
     if (m_digits.size() < 14) return;
 
-    for (int i = 0; i < m_numDigits; ++i) {
+    for (int i = 0; i < m_value.length(); ++i) {
         QChar ch = m_value.at(i);
         int idx;
         if (ch == ':') idx = 0;
