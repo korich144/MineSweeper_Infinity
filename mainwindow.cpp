@@ -118,6 +118,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_coordLabel = new QLabel("X: 0 Y: 0", this);
     statusBar()->addPermanentWidget(m_coordLabel);
+    statusBar()->setVisible(m_statusBarVisible);
     QTimer::singleShot(0, this, &MainWindow::restoreCamera);
 }
 
@@ -457,7 +458,6 @@ void MainWindow::onCellsOpened(int count) {
     int diff = m_wm->difficulty();
     if (diff > 0) {
         m_score += count * diff / 10;
-        if (m_score > 999999) m_score = 0;
     }
 }
 
@@ -476,6 +476,14 @@ void MainWindow::restoreCamera() {
     m_field->setOffset(0, 0);
     m_field->setScale(m_restoreScale);
     m_field->centerOn(m_restoreCellX, m_restoreCellY);
+}
+
+void MainWindow::toggleStatusBar() {
+    m_statusBarVisible = !m_statusBarVisible;
+    statusBar()->setVisible(m_statusBarVisible);
+    adjustWindowSizeForStatusBar(m_statusBarVisible);
+    Settings::instance().showStatusBar = m_statusBarVisible;
+    saveSettings();
 }
 
 void MainWindow::onSmilePressed() {
@@ -568,6 +576,9 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
         } else {
             setupOverlay();
         }
+        return;
+    } else if (event->key() == Qt::Key_F3) {
+        toggleStatusBar();
         return;
     }
     QMainWindow::keyPressEvent(event);
@@ -874,4 +885,16 @@ void MainWindow::updateWorldList() {
 void MainWindow::hideWarningLabels() {
     if (m_warnDiff) m_warnDiff->setVisible(false);
     if (m_warnSeed) m_warnSeed->setVisible(false);
+}
+
+void MainWindow::adjustWindowSizeForStatusBar(bool show) {
+    if (!statusBar()||isMaximized()) return;
+    int sbHeight = statusBar()->sizeHint().height();
+    if (sbHeight <= 0) sbHeight = 20;
+    QSize currentSize = size();
+    if (show) {
+        resize(currentSize.width(), currentSize.height() + sbHeight);
+    } else {
+        resize(currentSize.width(), currentSize.height() - sbHeight);
+    }
 }

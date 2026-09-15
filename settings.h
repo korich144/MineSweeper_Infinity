@@ -15,6 +15,7 @@ public:
     QString theme = "light";
     QSize windowSize{800, 600};
     bool maximized = false;
+    bool showStatusBar = false;
     QString lastWorld;
 };
 

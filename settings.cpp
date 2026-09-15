@@ -24,6 +24,7 @@ void Settings::load(const QString &path) {
         QJsonObject sz = o.value("windowSize").toObject();
         windowSize = QSize(sz.value("width").toInt(800), sz.value("height").toInt(600));
     }
+    showStatusBar = o.value("showStatusBar").toBool(false);
 }
 
 void Settings::save(const QString &path) {
@@ -36,6 +37,7 @@ void Settings::save(const QString &path) {
     sz["width"] = windowSize.width();
     sz["height"] = windowSize.height();
     o["windowSize"] = sz;
+    o["showStatusBar"] = showStatusBar;
 
     QDir().mkpath(QFileInfo(path).absolutePath());
     QFile f(path);

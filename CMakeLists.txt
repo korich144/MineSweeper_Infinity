@@ -9,6 +9,15 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ---------------------------------------------
+# Конфигурация профилирования (Profile)
+# ---------------------------------------------
+set(CMAKE_CONFIGURATION_TYPES "Debug;Release;Profile" CACHE STRING "" FORCE)
+
+set(CMAKE_CXX_FLAGS_PROFILE "-O2 -g" CACHE STRING "Flags for Profile build")
+set(CMAKE_C_FLAGS_PROFILE   "-O2 -g" CACHE STRING "Flags for Profile build")
+set(CMAKE_EXE_LINKER_FLAGS_PROFILE "" CACHE STRING "Linker flags for Profile build")
+
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets LinguistTools Core Gui)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets LinguistTools)
 

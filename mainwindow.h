@@ -57,6 +57,7 @@ private slots:
     void onRegenerateWorld();
     void onLoadWorld();
     void onOverlayClose();
+    void toggleStatusBar();
 
 signals:
     void requestSave();
@@ -73,6 +74,7 @@ private:
     void updateWorldList();                // заполняет список миров
     void saveCurrentWorld();               // сохраняет текущий мир в файл
     void hideWarningLabels();              // скрывает все предупреждения
+    void adjustWindowSizeForStatusBar(bool show);
 
     Ui::MainWindow *ui;
     MinefieldWidget *m_field;
@@ -125,6 +127,8 @@ private:
 
     bool m_diffChanged = false;
     bool m_seedChanged = false;
+
+    bool m_statusBarVisible = false;
 };
 
 #endif // MAINWINDOW_H
