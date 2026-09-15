@@ -11,7 +11,8 @@ public:
     void load(const QString &path);
     void save(const QString &path);
 
-    int difficulty = 6;
+    // Уровень сложности в текущей шкале (см. WorldManager::DEFAULT_DIFFICULTY).
+    int difficulty = 2;
     QString theme = "light";
     QSize windowSize{800, 600};
     bool maximized = false;

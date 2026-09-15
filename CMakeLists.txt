@@ -30,6 +30,13 @@ set(PROJECT_SOURCES
         mainwindow.cpp
         mainwindow.h
         mainwindow.ui
+        settingspanel.cpp
+        settingspanel.h
+        settingspanel.ui
+        theme.cpp
+        theme.h
+        scoring.cpp
+        scoring.h
         ${TS_FILES}
 )
 

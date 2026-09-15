@@ -11,6 +11,7 @@
 #include <QListView>
 #include <QStringListModel>
 #include <qpushbutton.h>
+#include "theme.h"
 
 class WorldManager;
 class Solver;
@@ -18,6 +19,7 @@ class Loader;
 class Saver;
 class MinefieldWidget;
 class CounterWidget;
+class SettingsPanel;
 class QFrame;
 class QLineEdit;
 class QComboBox;
@@ -36,6 +38,7 @@ public:
 protected:
     void closeEvent(QCloseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     void updateCounters();
@@ -45,8 +48,8 @@ private slots:
     void onFirstClick();
     void showSaveIndicator();
     void onSaveFinished();
-    void onCellsOpened(int count);
     void onFlagToggled(int delta);
+    void onMineExploded();
     void onMouseCellChanged(int64_t x, int64_t y);
     void restoreCamera();
 
@@ -63,18 +66,24 @@ signals:
     void requestSave();
 
 private:
-    void initNewWorld(const QString &seed, bool fromOverlay = false);
+    void initNewWorld(const QString &seed, int difficulty);
     void loadWorld(const QString &worldPath);
     void startEngine();
     void stopEngine();
     void saveSettings();
     void setupOverlay();
-    void applyTheme();                     // применяет QSS и рамки
-    void loadThemeColors();                // из последней строки спрайтлиста
+    void applyTheme();                     // применяет палитру, QSS и спрайты
+    void applyPanelTheme();                // передаёт палитру панели настроек
+    void loadThemeSheet();                 // читает спрайтлист текущей темы
     void updateWorldList();                // заполняет список миров
     void saveCurrentWorld();               // сохраняет текущий мир в файл
-    void hideWarningLabels();              // скрывает все предупреждения
+    void interruptReveal();                // останавливает открытие клеток
+    void applyPendingOpens();              // переносит очки за открытые клетки в счёт
+    bool flushRegions();                   // синхронно пишет грязные регионы на диск
     void adjustWindowSizeForStatusBar(bool show);
+    void scheduleCameraRestore();          // восстановление камеры после перезагрузки мира
+    int  panelDifficulty(int fallback) const;  // сложность из панели или запасное значение
+    QIcon loadCloseIcon() const;
 
     Ui::MainWindow *ui;
     MinefieldWidget *m_field;
@@ -100,12 +109,13 @@ private:
 
     bool m_cameraRestored = false;
     double m_restoreScale = 1.0;
-    int64_t m_restoreCellX = 0;
-    int64_t m_restoreCellY = 0;
+    double m_restoreCellX = 0.0;
+    double m_restoreCellY = 0.0;
 
     QVector<QPixmap> m_digitSprites;
     QVector<QPixmap> m_smileSprites;
-    QVector<QColor> m_themeColors;        // цвета из спрайтлиста
+    QPixmap m_themeSheet;                 // спрайтлист текущей темы
+    ThemePalette m_palette;               // палитра интерфейса из спрайтлиста
     CounterWidget *m_scoreWidget = nullptr;
     CounterWidget *m_timeWidget = nullptr;
     QFrame *m_scoreFrame = nullptr;
@@ -113,17 +123,9 @@ private:
 
     QLabel *m_coordLabel = nullptr;
 
-    // Overlay elements
+    // Окно настроек: затемнение + панель из settingspanel.ui
     QFrame *m_overlay = nullptr;
-    QLineEdit *m_diffEdit = nullptr;
-    QLineEdit *m_seedEdit = nullptr;
-    QComboBox *m_themeCombo = nullptr;
-    QLabel *m_warnDiff = nullptr;
-    QLabel *m_warnSeed = nullptr;
-    QListView *m_worldListView = nullptr;
-    QStringListModel *m_worldListModel = nullptr;
-    QPushButton *m_loadWorldBtn = nullptr;
-    QPushButton *m_regenerateBtn = nullptr;
+    SettingsPanel *m_settingsPanel = nullptr;
 
     bool m_diffChanged = false;
     bool m_seedChanged = false;

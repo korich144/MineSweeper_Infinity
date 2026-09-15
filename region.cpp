@@ -3,6 +3,17 @@
 #include <QDir>
 #include <QMap>
 
+namespace {
+
+// Сигнатура нового формата региона. Старые файлы её не содержат,
+// поэтому их можно прочитать по прежней раскладке.
+const char REGION_MAGIC[Region::MAGIC_SIZE + 1] = "MSWREG02";
+
+inline int bitByte(int bit) { return bit / 8; }
+inline int bitMask(int bit) { return 1 << (bit % 8); }
+
+} // namespace
+
 int Region::chunkIndex(int64_t chunkX, int64_t chunkY, int64_t regX, int64_t regY) {
     int lx = static_cast<int>(chunkX - regX * CHUNKS_PER_SIDE);
     int ly = static_cast<int>(chunkY - regY * CHUNKS_PER_SIDE);
@@ -24,6 +35,28 @@ void Region::setChunkPresent(QByteArray &header, int index, bool present) {
         header[byteIdx] = static_cast<char>(header[byteIdx] & ~(1 << bitIdx));
 }
 
+void Region::decodeChunk(Chunk &chunk, const QByteArray &data, bool hasActiveMap) {
+    const uint8_t *opened = reinterpret_cast<const uint8_t*>(data.constData());
+    const uint8_t *flagged = reinterpret_cast<const uint8_t*>(data.constData() + BITMAP_SIZE);
+    const uint8_t *active = hasActiveMap
+        ? reinterpret_cast<const uint8_t*>(data.constData() + BITMAP_SIZE * 2)
+        : nullptr;
+
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            int bit = y * 16 + x;
+            if (opened[bitByte(bit)] & bitMask(bit))
+                chunk.cells[x][y] = CellState::OPENED_0;   // точное число мин посчитает fixupChunkCells
+            else if (flagged[bitByte(bit)] & bitMask(bit))
+                chunk.cells[x][y] = CellState::FLAGGED;
+            else if (active && (active[bitByte(bit)] & bitMask(bit)))
+                chunk.cells[x][y] = CellState::ACTIVE;     // ждёт открытия, встанет в очередь
+            else
+                chunk.cells[x][y] = CellState::CLOSED;
+        }
+    }
+}
+
 std::shared_ptr<Chunk> Region::loadChunk(const QString &regionPath,
                                          int64_t chunkX, int64_t chunkY,
                                          int64_t regX, int64_t regY) {
@@ -34,6 +67,13 @@ std::shared_ptr<Chunk> Region::loadChunk(const QString &regionPath,
     QFile file(regionPath);
     if (!file.open(QIODevice::ReadOnly))
         return chunk;
+
+    const QByteArray magic = file.read(MAGIC_SIZE);
+    const bool currentFormat = (magic.size() == MAGIC_SIZE && magic == QByteArray(REGION_MAGIC, MAGIC_SIZE));
+    if (!currentFormat)
+        file.seek(0);   // старое сохранение: заголовок начинается с нуля
+
+    const int chunkDataSize = currentFormat ? CHUNK_DATA_SIZE : LEGACY_CHUNK_DATA_SIZE;
 
     QByteArray header = file.read(HEADER_SIZE);
     if (header.size() < HEADER_SIZE) {
@@ -52,30 +92,15 @@ std::shared_ptr<Chunk> Region::loadChunk(const QString &regionPath,
         if (isChunkPresent(header, i))
             ++preceding;
     }
-    qint64 offset = HEADER_SIZE + static_cast<qint64>(preceding) * CHUNK_DATA_SIZE;
-    file.seek(offset);
-    QByteArray data = file.read(CHUNK_DATA_SIZE);
+    const qint64 base = (currentFormat ? HEADER_OFFSET : 0) + HEADER_SIZE;
+    file.seek(base + static_cast<qint64>(preceding) * chunkDataSize);
+    QByteArray data = file.read(chunkDataSize);
     file.close();
 
-    if (data.size() < CHUNK_DATA_SIZE)
+    if (data.size() < chunkDataSize)
         return chunk;
 
-    const uint8_t *opened = reinterpret_cast<const uint8_t*>(data.constData());
-    const uint8_t *flagged = reinterpret_cast<const uint8_t*>(data.constData() + 32);
-
-    for (int y = 0; y < 16; ++y) {
-        for (int x = 0; x < 16; ++x) {
-            int bitIdx = y * 16 + x;
-            int byte = bitIdx / 8;
-            int mask = 1 << (bitIdx % 8);
-            if (opened[byte] & mask)
-                chunk->cells[x][y] = CellState::OPENED_0; // будет исправлено позже
-            else if (flagged[byte] & mask)
-                chunk->cells[x][y] = CellState::FLAGGED;
-            else
-                chunk->cells[x][y] = CellState::CLOSED;
-        }
-    }
+    decodeChunk(*chunk, data, currentFormat);
     return chunk;
 }
 
@@ -83,19 +108,34 @@ void Region::saveRegion(const QString &regionPath, int64_t regX, int64_t regY,
                         const QHash<ChunkCoord, std::shared_ptr<Chunk>> &chunks) {
     // Загружаем старый файл региона, чтобы не потерять чанки, которых нет в памяти
     QByteArray header(HEADER_SIZE, 0);
-    QMap<int, QByteArray> existingData;  // индекс чанка -> его 64-байтные данные
+    QMap<int, QByteArray> existingData;  // индекс чанка -> его данные
 
     QFile oldFile(regionPath);
     if (oldFile.open(QIODevice::ReadOnly)) {
+        const QByteArray oldMagic = oldFile.read(MAGIC_SIZE);
+        const bool oldCurrentFormat =
+            (oldMagic.size() == MAGIC_SIZE && oldMagic == QByteArray(REGION_MAGIC, MAGIC_SIZE));
+        if (!oldCurrentFormat)
+            oldFile.seek(0);
+
+        const int oldChunkDataSize = oldCurrentFormat ? CHUNK_DATA_SIZE : LEGACY_CHUNK_DATA_SIZE;
+
         QByteArray oldHeader = oldFile.read(HEADER_SIZE);
         if (oldHeader.size() == HEADER_SIZE) {
             header = oldHeader;
             // Считываем данные всех присутствующих чанков в порядке их индексов
             for (int i = 0; i < CHUNKS_PER_SIDE * CHUNKS_PER_SIDE; ++i) {
                 if (isChunkPresent(header, i)) {
-                    QByteArray data = oldFile.read(CHUNK_DATA_SIZE);
-                    if (data.size() == CHUNK_DATA_SIZE) {
-                        existingData[i] = data;
+                    QByteArray data = oldFile.read(oldChunkDataSize);
+                    if (data.size() == oldChunkDataSize) {
+                        if (oldCurrentFormat) {
+                            existingData[i] = data;
+                        } else {
+                            // Дополняем старое сохранение пустой картой ACTIVE
+                            QByteArray upgraded = data;
+                            upgraded.append(QByteArray(BITMAP_SIZE, 0));
+                            existingData[i] = upgraded;
+                        }
                     }
                 }
             }
@@ -111,21 +151,25 @@ void Region::saveRegion(const QString &regionPath, int64_t regX, int64_t regY,
         if (idx < 0 || idx >= CHUNKS_PER_SIDE * CHUNKS_PER_SIDE) continue;
 
         const auto &cells = it.value()->cells;
-        uint8_t opened[32] = {};
-        uint8_t flagged[32] = {};
+        uint8_t opened[BITMAP_SIZE] = {};
+        uint8_t flagged[BITMAP_SIZE] = {};
+        uint8_t active[BITMAP_SIZE] = {};
         for (int y = 0; y < 16; ++y) {
             for (int x = 0; x < 16; ++x) {
                 int bit = y * 16 + x;
                 CellState s = cells[x][y];
                 if (s >= CellState::OPENED_8 && s <= CellState::OPENED_0)
-                    opened[bit / 8] |= (1 << (bit % 8));
+                    opened[bitByte(bit)] |= bitMask(bit);
                 else if (s == CellState::FLAGGED)
-                    flagged[bit / 8] |= (1 << (bit % 8));
+                    flagged[bitByte(bit)] |= bitMask(bit);
+                else if (s == CellState::ACTIVE)
+                    active[bitByte(bit)] |= bitMask(bit);
             }
         }
         QByteArray newData;
-        newData.append(reinterpret_cast<const char*>(opened), 32);
-        newData.append(reinterpret_cast<const char*>(flagged), 32);
+        newData.append(reinterpret_cast<const char*>(opened), BITMAP_SIZE);
+        newData.append(reinterpret_cast<const char*>(flagged), BITMAP_SIZE);
+        newData.append(reinterpret_cast<const char*>(active), BITMAP_SIZE);
         existingData[idx] = newData;
         setChunkPresent(header, idx, true);
     }
@@ -136,6 +180,7 @@ void Region::saveRegion(const QString &regionPath, int64_t regX, int64_t regY,
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return;
 
+    file.write(REGION_MAGIC, MAGIC_SIZE);
     file.write(header);
     for (int i = 0; i < CHUNKS_PER_SIDE * CHUNKS_PER_SIDE; ++i) {
         if (isChunkPresent(header, i)) {

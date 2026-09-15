@@ -21,7 +21,7 @@ public slots:
 
 private:
     void loadChunk(int64_t chunkX, int64_t chunkY);
-    void scanBorderForActive(int64_t chunkX, int64_t chunkY);
+    void scanForActive(int64_t chunkX, int64_t chunkY);
 
     WorldManager *m_wm;
     Solver *m_solver;

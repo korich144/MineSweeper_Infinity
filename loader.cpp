@@ -39,16 +39,24 @@ void Loader::loadChunk(int64_t chunkX, int64_t chunkY) {
 
     auto chunk = Region::loadChunk(path, chunkX, chunkY, regX, regY);
     m_wm->addLoadedChunk(chunk);
-    scanBorderForActive(chunkX, chunkY);
+    scanForActive(chunkX, chunkY);
 }
 
-void Loader::scanBorderForActive(int64_t chunkX, int64_t chunkY) {
+void Loader::scanForActive(int64_t chunkX, int64_t chunkY) {
     auto check = [this](int64_t x, int64_t y) {
         if (m_wm->cellStateAt(x, y) == CellState::ACTIVE) {
             m_solver->addToQueue(x, y);
             m_solver->processQueueIfIdle();   // <-- запрос на обработку
         }
     };
+
+    // Клетки внутри самого чанка: они могли быть сохранены как ACTIVE,
+    // если открытие прервали (игра закрыта или создан новый мир).
+    for (int i = 0; i < 16; ++i)
+        for (int j = 0; j < 16; ++j)
+            check(chunkX * 16 + i, chunkY * 16 + j);
+
+    // Клетки соседних чанков, которые ждали загрузки этого.
     for (int i = 0; i < 16; ++i) check(chunkX * 16 - 1, chunkY * 16 + i);
     for (int i = 0; i < 16; ++i) check((chunkX + 1) * 16, chunkY * 16 + i);
     for (int i = 0; i < 16; ++i) check(chunkX * 16 + i, chunkY * 16 - 1);

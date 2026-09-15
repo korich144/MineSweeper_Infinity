@@ -42,7 +42,7 @@ void MinefieldWidget::setOffset(int64_t x, int64_t y) {
     update();
 }
 
-void MinefieldWidget::centerOn(int64_t x, int64_t y) {
+void MinefieldWidget::centerOn(double x, double y) {
     QPointF center = rect().center();
     QPointF cellScreen = cellToScreen(x, y);
     m_offset += (center - cellScreen);
@@ -111,7 +111,7 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
     }
 }
 
-QPointF MinefieldWidget::cellToScreen(int64_t cx, int64_t cy) const {
+QPointF MinefieldWidget::cellToScreen(double cx, double cy) const {
     return QPointF(m_offset.x() + cx * 16 * m_scale,
                    m_offset.y() + cy * 16 * m_scale);
 }

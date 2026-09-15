@@ -1,19 +1,28 @@
 #include "worldmanager.h"
 #include <QThread>
 #include <QtMath>
+#include <cmath>
 
-// Deterministic hash function for mine placement
-static uint64_t seedHash(const QString &seed) {
-    QByteArray ba = seed.toUtf8();
-    uint64_t h = 0;
-    for (char c : ba)
-        h = (h * 131) + static_cast<uint8_t>(c);
-    return h;
+double WorldManager::mineProbabilityFor(int difficulty) {
+    int level = clampDifficulty(difficulty);
+    double t = static_cast<double>(level - MIN_DIFFICULTY) / (MAX_DIFFICULTY - MIN_DIFFICULTY);
+    // Экспоненциальная интерполяция: 1 -> MIN, MAX_DIFFICULTY -> MAX
+    return MIN_MINE_PROBABILITY * std::pow(MAX_MINE_PROBABILITY / MIN_MINE_PROBABILITY, t);
+}
+
+int WorldManager::difficultyForProbability(double probability) {
+    if (!(probability > 0.0)) return MIN_DIFFICULTY;
+    double p = qBound(MIN_MINE_PROBABILITY, probability, MAX_MINE_PROBABILITY);
+    double t = std::log(p / MIN_MINE_PROBABILITY) / std::log(MAX_MINE_PROBABILITY / MIN_MINE_PROBABILITY);
+    double level = MIN_DIFFICULTY + t * (MAX_DIFFICULTY - MIN_DIFFICULTY);
+    return clampDifficulty(static_cast<int>(std::lround(level)));
 }
 
 WorldManager::WorldManager(const QString &seed, int difficulty, QObject *parent)
-    : QObject(parent), m_seed(seed), m_difficulty(difficulty)
+    : QObject(parent), m_seed(seed), m_difficulty(clampDifficulty(difficulty))
 {
+    m_mineProbability = mineProbabilityFor(m_difficulty);
+    m_mineChanceNumerator = static_cast<uint64_t>(qRound64(m_mineProbability * CHANCE_SCALE));
     computeHash();
 }
 
@@ -39,7 +48,7 @@ void WorldManager::computeHash() {
 }
 
 bool WorldManager::isMine(int64_t x, int64_t y) const {
-    if (m_difficulty <= 0) return false;
+    if (m_mineChanceNumerator == 0) return false;
     uint64_t h = m_hash;
     // смешиваем с координатами
     h ^= static_cast<uint64_t>(x) * 0x9e3779b97f4a7c15ULL;
@@ -50,7 +59,7 @@ bool WorldManager::isMine(int64_t x, int64_t y) const {
     h ^= h >> 33;
     h *= 0xc4ceb9fe1a85ec53ULL;
     h ^= h >> 33;
-    return (h % m_difficulty) == 0;
+    return (h % CHANCE_SCALE) < m_mineChanceNumerator;
 }
 
 CellState WorldManager::cellStateAt(int64_t x, int64_t y) const {
@@ -112,6 +121,7 @@ bool WorldManager::revealCell(int64_t x, int64_t y) {
     if (isMine(x, y)) {
         m_gameActive = false;
         setCellState(x, y, CellState::MINE_EXPLODED);
+        emit mineExploded();
         return false;
     }
     return true;

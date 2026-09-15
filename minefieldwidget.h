@@ -20,7 +20,8 @@ public:
     double scale() const { return m_scale; }
     void setScale(double scale);
     void setOffset(int64_t x, int64_t y);
-    void centerOn(int64_t x, int64_t y);
+    // Ставит точку (x,y) в мировых координатах в центр виджета (дробные значения — доли клетки).
+    void centerOn(double x, double y);
 
     QPointF screenToCell(const QPointF &pos) const;
 
@@ -38,7 +39,7 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
 
 private:
-    QPointF cellToScreen(int64_t cx, int64_t cy) const;
+    QPointF cellToScreen(double cx, double cy) const;
 
     WorldManager *m_wm = nullptr;
     QVector<QPixmap> m_cellSprites;

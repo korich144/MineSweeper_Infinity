@@ -6,31 +6,13 @@ Solver::Solver(WorldManager *wm, QObject *parent)
 {}
 
 void Solver::startReveal(int64_t x, int64_t y) {
-    if (!m_wm->isGameActive() || m_running) return;
-    m_running = true;
-    m_openedCounter = 0;
+    if (isCancelled() || !m_wm->isGameActive()) return;
 
-    processCell(x, y);
-
-    // обрабатываем очередь "отложенных" ACTIVE-клеток
-    while (true) {
+    {
         QMutexLocker lock(&m_queueMutex);
-        if (m_activeQueue.isEmpty()) break;
-        auto cell = *m_activeQueue.begin();
-        m_activeQueue.erase(m_activeQueue.begin());
-        lock.unlock();
-        processCell(cell.first, cell.second);
+        m_activeQueue.insert({x, y});
     }
-
-    m_running = false;
-
-    if (m_openedCounter > 0) {
-        emit cellsOpened(m_openedCounter);
-        m_openedCounter = 0;
-    }
-    emit finished();
-
-    processQueueIfIdle();
+    runQueue();
 }
 
 void Solver::addToQueue(int64_t x, int64_t y) {
@@ -39,26 +21,92 @@ void Solver::addToQueue(int64_t x, int64_t y) {
 }
 
 void Solver::processQueueIfIdle() {
-    if (m_running) return;
-    m_running = true;
-    m_openedCounter = 0;
-    while (true) {
-        QMutexLocker lock(&m_queueMutex);
-        if (m_activeQueue.isEmpty()) break;
-        auto cell = *m_activeQueue.begin();
-        m_activeQueue.erase(m_activeQueue.begin());
-        lock.unlock();
-        processCell(cell.first, cell.second);
-    }
-    if (m_openedCounter > 0) {
-        emit cellsOpened(m_openedCounter);
-        m_openedCounter = 0;
-    }
-    m_running = false;
+    runQueue();
 }
 
-void Solver::processCell(int64_t x, int64_t y, int depth) {
-    if (depth > MAX_RECURSION || !m_wm->isGameActive()) return;
+void Solver::runQueue() {
+    // Обработку ведёт только один поток: либо поток решателя, либо поток
+    // загрузчика, который дошёл до границы с ACTIVE-клетками.
+    if (m_running.exchange(true)) return;
+
+    bool cancelled = false;
+
+    while (true) {
+        if (isCancelled()) {
+            cancelled = true;
+            break;
+        }
+
+        int64_t x = 0, y = 0;
+        bool haveCell = false;
+
+        if (!m_pending.isEmpty()) {
+            auto it = m_pending.begin();
+            x = it->first;
+            y = it->second;
+            m_pending.erase(it);
+            haveCell = true;
+        } else {
+            QMutexLocker lock(&m_queueMutex);
+            if (!m_activeQueue.isEmpty()) {
+                auto it = m_activeQueue.begin();
+                x = it->first;
+                y = it->second;
+                m_activeQueue.erase(it);
+                haveCell = true;
+            }
+        }
+
+        if (!haveCell) break;
+        processCell(x, y);
+    }
+
+    if (cancelled)
+        markPendingAsActive();
+    m_pending.clear();
+
+    m_running.store(false);
+
+    {
+        QMutexLocker lock(&m_idleMutex);
+        m_idleCondition.wakeAll();
+    }
+
+    emit finished();
+}
+
+void Solver::markPendingAsActive() {
+    // Клетки, которые ждали открытия, но не дождались: сохраняем их как ACTIVE,
+    // чтобы после загрузки мира они снова попали в очередь. Уже открытые клетки
+    // в очереди не трогаем — иначе открытая клетка стала бы «ждущей».
+    auto mark = [this](int64_t x, int64_t y) {
+        if (m_wm->cellStateAt(x, y) == CellState::CLOSED)
+            m_wm->setCellStateIfLoaded(x, y, CellState::ACTIVE);
+    };
+
+    for (const auto &cell : m_pending)
+        mark(cell.first, cell.second);
+
+    QMutexLocker lock(&m_queueMutex);
+    for (const auto &cell : m_activeQueue)
+        mark(cell.first, cell.second);
+    m_activeQueue.clear();
+}
+
+void Solver::requestCancel() {
+    // Флаг не снимается: после прерывания мир всегда пересоздаётся вместе
+    // с движком, а так исключены гонки с запоздавшими запросами на открытие.
+    m_cancelRequested.store(true);
+
+    // Ждём, пока поток обработки закончит текущую клетку: после этого
+    // регион больше никто не меняет и его можно сохранять.
+    QMutexLocker lock(&m_idleMutex);
+    while (m_running.load())
+        m_idleCondition.wait(&m_idleMutex, 100);
+}
+
+void Solver::processCell(int64_t x, int64_t y) {
+    if (!m_wm->isGameActive()) return;
 
     int64_t cx = x >> 4;
     int64_t cy = y >> 4;
@@ -72,19 +120,16 @@ void Solver::processCell(int64_t x, int64_t y, int depth) {
     if (m_wm->isMine(x, y)) return;
 
     bool allNeighborsLoaded = true;
-    for (int dy = -1; dy <= 1; ++dy) {
+    for (int dy = -1; dy <= 1 && allNeighborsLoaded; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
             if (dx == 0 && dy == 0) continue;
-            int64_t nx = x + dx;
-            int64_t ny = y + dy;
-            int64_t ncx = nx >> 4;
-            int64_t ncy = ny >> 4;
+            int64_t ncx = (x + dx) >> 4;
+            int64_t ncy = (y + dy) >> 4;
             if (!m_wm->getChunk(ncx, ncy)) {
                 allNeighborsLoaded = false;
                 break;
             }
         }
-        if (!allNeighborsLoaded) break;
     }
 
     if (!allNeighborsLoaded) {
@@ -93,23 +138,20 @@ void Solver::processCell(int64_t x, int64_t y, int depth) {
         return;
     }
 
-    int mines = countNeighborMines(x, y);
-    CellState newState;
-    if (mines == 0)
-        newState = CellState::OPENED_0;
-    else
-        newState = static_cast<CellState>(15 - mines);
+    const int mines = countNeighborMines(x, y);
+    const CellState newState = (mines == 0)
+        ? CellState::OPENED_0
+        : static_cast<CellState>(15 - mines);
 
     m_wm->setCellState(x, y, newState);
-    ++m_openedCounter;   // <-- считаем открытую клетку
+    ++m_openedTotal;
 
     if (mines == 0) {
-        for (int dy = -1; dy <= 1; ++dy) {
+        for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx) {
                 if (dx == 0 && dy == 0) continue;
-                processCell(x + dx, y + dy, depth + 1);
+                m_pending.insert({x + dx, y + dy});
             }
-        }
     }
 }
 

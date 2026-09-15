@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "worldmanager.h"
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -16,7 +17,21 @@ void Settings::load(const QString &path) {
     f.close();
     if (!doc.isObject()) return;
     QJsonObject o = doc.object();
-    difficulty = o.value("difficulty").toInt(6);
+    // Сложность приводим к текущей шкале (см. WorldManager::DIFFICULTY_SCHEME_VERSION).
+    const int version = o.value("difficultyVersion").toInt(0);
+    const int stored = o.value("difficulty").toInt(WorldManager::DEFAULT_DIFFICULTY);
+    if (version >= WorldManager::DIFFICULTY_SCHEME_VERSION) {
+        difficulty = WorldManager::clampDifficulty(stored);
+    } else if (version == 1) {
+        // Были уровни 1..10 — переводим сдвигом.
+        difficulty = WorldManager::clampDifficulty(WorldManager::fromLevelScheme(stored));
+    } else if (stored > 0) {
+        // Самый старый формат: сложность была знаменателем плотности (1/N мин).
+        // Подбираем уровень с той же плотностью.
+        difficulty = WorldManager::difficultyForProbability(1.0 / stored);
+    } else {
+        difficulty = WorldManager::DEFAULT_DIFFICULTY;
+    }
     theme = o.value("theme").toString("light");
     lastWorld = o.value("lastWorld").toString();
     maximized = o.value("maximized").toBool(false);
@@ -30,6 +45,7 @@ void Settings::load(const QString &path) {
 void Settings::save(const QString &path) {
     QJsonObject o;
     o["difficulty"] = difficulty;
+    o["difficultyVersion"] = WorldManager::DIFFICULTY_SCHEME_VERSION;
     o["theme"] = theme;
     o["lastWorld"] = lastWorld;
     o["maximized"] = maximized;

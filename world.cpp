@@ -15,12 +15,14 @@ WorldInfo World::load(const QString &worldPath) {
     QJsonObject o = doc.object();
     info.seed = o.value("seed").toString();
     info.originalName = o.value("originalName").toString();
-    info.lastViewX = static_cast<qint64>(o.value("lastViewX").toDouble());
-    info.lastViewY = static_cast<qint64>(o.value("lastViewY").toDouble());
+    info.lastViewX = o.value("lastViewX").toDouble(0.0);
+    info.lastViewY = o.value("lastViewY").toDouble(0.0);
     info.lastScale = o.value("lastScale").toDouble(1.0);
     info.score = static_cast<qint64>(o.value("score").toDouble());
     info.flagsPlaced = static_cast<qint64>(o.value("flagsPlaced").toDouble());
     info.elapsed = static_cast<qint64>(o.value("elapsed").toDouble());
+    info.difficulty = o.value("difficulty").toInt(0);
+    info.difficultyVersion = o.value("difficultyVersion").toInt(0);
     info.gameActive = o.value("gameActive").toBool(true);
     info.folderName = QDir(worldPath).dirName();
     return info;
@@ -30,12 +32,14 @@ void World::save(const QString &worldPath, const WorldInfo &info) {
     QJsonObject o;
     o["seed"] = info.seed;
     o["originalName"] = info.originalName;
-    o["lastViewX"] = static_cast<double>(info.lastViewX);
-    o["lastViewY"] = static_cast<double>(info.lastViewY);
+    o["lastViewX"] = info.lastViewX;
+    o["lastViewY"] = info.lastViewY;
     o["lastScale"] = info.lastScale;
     o["score"] = static_cast<double>(info.score);
     o["flagsPlaced"] = static_cast<double>(info.flagsPlaced);
     o["elapsed"] = static_cast<double>(info.elapsed);
+    o["difficulty"] = info.difficulty;
+    o["difficultyVersion"] = info.difficultyVersion;
     o["gameActive"] = info.gameActive;
 
     QDir().mkpath(worldPath);

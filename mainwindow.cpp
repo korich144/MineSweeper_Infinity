@@ -2,15 +2,18 @@
 #include "ui_mainwindow.h"
 #include "minefieldwidget.h"
 #include "counterwidget.h"
+#include "settingspanel.h"
 #include "worldmanager.h"
 #include "solver.h"
 #include "loader.h"
 #include "saver.h"
 #include "settings.h"
 #include "world.h"
+#include "scoring.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QFrame>
@@ -22,11 +25,41 @@
 #include <QDateTime>
 #include <QKeyEvent>
 #include <QCloseEvent>
-#include <QListView>
-#include <QStringListModel>
+#include <QResizeEvent>
 #include <QPainter>
 #include <QApplication>
 #include <QStyle>
+
+namespace {
+
+// Имя папки мира строится из времени с точностью до секунды, поэтому два мира,
+// созданные подряд, попадали в одну папку и затирали друг друга.
+QString uniqueWorldFolderName(const QString &worldsDir) {
+    const QString base = QDateTime::currentDateTime().toString("yyyy-MM-dd_HHmmss");
+    QString name = base;
+    for (int i = 2; QDir(worldsDir + "/" + name).exists(); ++i)
+        name = QString("%1_%2").arg(base).arg(i);
+    return name;
+}
+
+// Была ли в сохранении мира записана сложность. Ноль — законный уровень
+// в текущей схеме, поэтому «не задано» определяется по отметке версии:
+// поле difficulty появилось в схеме 1 (уровни 1..10) ещё без версии,
+// а в самых старых сохранениях его нет вовсе.
+bool worldHasDifficulty(const WorldInfo &info) {
+    return info.difficultyVersion >= WorldManager::DIFFICULTY_SCHEME_VERSION
+        || info.difficulty != 0;
+}
+
+// Приводит сложность из сохранения мира к текущей шкале
+// (см. WorldManager::DIFFICULTY_SCHEME_VERSION).
+int migratedDifficulty(const WorldInfo &info) {
+    if (info.difficultyVersion >= WorldManager::DIFFICULTY_SCHEME_VERSION)
+        return WorldManager::clampDifficulty(info.difficulty);
+    return WorldManager::clampDifficulty(WorldManager::fromLevelScheme(info.difficulty));
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -43,6 +76,8 @@ MainWindow::MainWindow(QWidget *parent)
     // загрузка настроек
     QString settingsPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/settings.ini";
     Settings::instance().load(settingsPath);
+    Settings::instance().difficulty = WorldManager::clampDifficulty(Settings::instance().difficulty);
+    m_statusBarVisible = Settings::instance().showStatusBar;
     if (Settings::instance().maximized)
         setWindowState(Qt::WindowMaximized);
     else
@@ -76,13 +111,12 @@ MainWindow::MainWindow(QWidget *parent)
         }
     }
     if (!loaded) {
-        initNewWorld(World::generateSeed());
+        initNewWorld(World::generateSeed(), Settings::instance().difficulty);
     }
 
     startEngine();
 
-    // спрайты темы
-    loadThemeColors();
+    // спрайты и палитра темы
     applyTheme();
 
     m_scoreWidget = new CounterWidget(m_digitSprites, ui->frameHeader);
@@ -119,7 +153,6 @@ MainWindow::MainWindow(QWidget *parent)
     m_coordLabel = new QLabel("X: 0 Y: 0", this);
     statusBar()->addPermanentWidget(m_coordLabel);
     statusBar()->setVisible(m_statusBarVisible);
-    QTimer::singleShot(0, this, &MainWindow::restoreCamera);
 }
 
 MainWindow::~MainWindow() {
@@ -127,50 +160,34 @@ MainWindow::~MainWindow() {
     delete ui;
 }
 
-// В функции loadThemeColors:
-void MainWindow::loadThemeColors() {
-    m_themeColors.clear();
-    QString theme = Settings::instance().theme;
-    QString path = QString(":/themes/%1.bmp").arg(theme);
-    QPixmap sheet(path);
-    if (sheet.isNull()) {
-        sheet.load("sprites/" + theme + ".bmp");
-    }
-    if (sheet.isNull()) {
-        qWarning() << "Cannot load theme for colors:" << theme;
-        return;
-    }
-    QImage img = sheet.toImage();
-    if (img.height() <= 63) return;
-    for (int x = 0; x < qMin(16, img.width()); ++x) {
-        m_themeColors.append(img.pixelColor(x, 63));
-    }
-    // дополняем
-    while (m_themeColors.size() < 16) {
-        m_themeColors.append(Qt::gray);
-    }
+// Читает спрайтлист текущей темы (из ресурсов, иначе из папки sprites).
+void MainWindow::loadThemeSheet() {
+    const QString theme = Settings::instance().theme;
+    m_themeSheet = QPixmap(QString(":/themes/%1.bmp").arg(theme));
+    if (m_themeSheet.isNull())
+        m_themeSheet.load("sprites/" + theme + ".bmp");
+    if (m_themeSheet.isNull())
+        qWarning() << "Cannot load theme:" << theme;
 }
 
 void MainWindow::applyTheme() {
-    // Загружаем спрайты для счётчиков и смайликов (как было)
-    QString theme = Settings::instance().theme;
-    QString path = QString(":/themes/%1.bmp").arg(theme);
-    QPixmap sheet(path);
-    if (sheet.isNull()) sheet.load("sprites/" + theme + ".bmp");
-    if (!sheet.isNull()) {
+    loadThemeSheet();
+
+    // Палитра интерфейса и спрайты берутся из одного и того же спрайтлиста.
+    m_palette = ThemePalette::fromSheet(m_themeSheet);
+
+    if (!m_themeSheet.isNull()) {
         m_digitSprites.clear();
         for (int i = 0; i < 14; ++i)
-            m_digitSprites.append(sheet.copy(i * 13, 16, 13, 23));
+            m_digitSprites.append(m_themeSheet.copy(i * 13, 16, 13, 23));
 
         m_smileSprites.clear();
-        for (int i = 0; i < 5; ++i) {
-            QPixmap sp = sheet.copy(i * 24, 39, 24, 24);
-            m_smileSprites.append(sp);
-        }
+        for (int i = 0; i < 5; ++i)
+            m_smileSprites.append(m_themeSheet.copy(i * 24, 39, 24, 24));
         ui->smileButton->setIcon(QIcon(m_smileSprites[4]));
         ui->smileButton->setIconSize(QSize(24, 24));
     }
-    m_field->setTheme(theme);
+    m_field->setTheme(Settings::instance().theme);
 
     // Обновляем цвета счётчиков
     if (m_scoreWidget) {
@@ -182,7 +199,6 @@ void MainWindow::applyTheme() {
         m_timeWidget->update();
     }
 
-    // Применяем стили XP
     // frameHeader – 2px raised
     ui->frameHeader->setFrameStyle(QFrame::Panel | QFrame::Sunken);
     ui->frameHeader->setLineWidth(2);
@@ -193,33 +209,36 @@ void MainWindow::applyTheme() {
     ui->frameField->setLineWidth(4);
     ui->frameField->setMidLineWidth(0);
 
-    // Цвета из m_themeColors (если есть)
-    if (m_themeColors.size() >= 8) {
-        QColor bg = m_themeColors[0];
-        QColor panelBg = m_themeColors[1];
-        QColor textColor = m_themeColors[2];
-        QColor lightBorder = m_themeColors[4];
-        QColor darkBorder = m_themeColors[5];
-        QColor fieldBg = m_themeColors[6];
-
+    // Фон окна и панелей — из палитры темы
+    if (m_palette.valid) {
         QString style = QString(
                             "QMainWindow { background-color: %1; }"
                             "QFrame#frameHeader { background-color: %2; }"
                             "QFrame#frameField { background-color: %3; }"
-                            ).arg(bg.name(), panelBg.name(), fieldBg.name());
-
-        // Можно добавить стили для других элементов
+                            ).arg(m_palette.panelBg.name(),
+                                  m_palette.controlFace.name(),
+                                  m_palette.fieldBg.name());
         this->setStyleSheet(style);
     }
 
-    // Обновляем overlay, если открыт
-    if (m_overlay && m_overlay->isVisible()) {
-        // обновим цвета градиента и т.д. (см. setupOverlay)
-        // для простоты пересоздадим overlay
-        m_overlay->deleteLater();
-        m_overlay = nullptr;
-        setupOverlay();
-    }
+    // Панель настроек, если открыта, обновляется без пересоздания
+    applyPanelTheme();
+}
+
+void MainWindow::applyPanelTheme() {
+    if (!m_settingsPanel) return;
+    m_settingsPanel->applyTheme(m_palette);
+    m_settingsPanel->setCloseIcon(loadCloseIcon());
+}
+
+QIcon MainWindow::loadCloseIcon() const {
+    if (m_themeSheet.isNull()) return QIcon();
+
+    QIcon icon;
+    icon.addPixmap(m_themeSheet.copy(120, 39, 16, 14), QIcon::Normal);
+    icon.addPixmap(m_themeSheet.copy(136, 39, 16, 14), QIcon::Active);
+    icon.addPixmap(m_themeSheet.copy(136, 39, 16, 14), QIcon::Selected);
+    return icon;
 }
 
 void MainWindow::startEngine() {
@@ -252,9 +271,9 @@ void MainWindow::startEngine() {
     connect(ui->smileButton, &QPushButton::released, this, &MainWindow::onSmileReleased);
     connect(ui->smileButton, &QPushButton::clicked, this, &MainWindow::onSmileClicked);
 
-    connect(m_solver, &Solver::cellsOpened, this, &MainWindow::onCellsOpened, Qt::QueuedConnection);
     connect(m_field, &MinefieldWidget::flagToggled, this, &MainWindow::onFlagToggled);
     connect(m_field, &MinefieldWidget::mouseCellChanged, this, &MainWindow::onMouseCellChanged);
+    connect(m_wm, &WorldManager::mineExploded, this, &MainWindow::onMineExploded);
 }
 
 void MainWindow::stopEngine() {
@@ -267,37 +286,51 @@ void MainWindow::stopEngine() {
     disconnect(ui->smileButton, &QPushButton::pressed, this, &MainWindow::onSmilePressed);
     disconnect(ui->smileButton, &QPushButton::released, this, &MainWindow::onSmileReleased);
     disconnect(ui->smileButton, &QPushButton::clicked, this, &MainWindow::onSmileClicked);
-    disconnect(m_solver, &Solver::cellsOpened, this, &MainWindow::onCellsOpened);
     disconnect(m_field, &MinefieldWidget::flagToggled, this, &MainWindow::onFlagToggled);
     disconnect(m_field, &MinefieldWidget::mouseCellChanged, this, &MainWindow::onMouseCellChanged);
+    disconnect(m_wm, &WorldManager::mineExploded, this, &MainWindow::onMineExploded);
 
-    m_solverThread->quit();
-    m_loaderThread->quit();
-    m_saverThread->quit();
-    m_solverThread->wait();
-    m_loaderThread->wait();
-    m_saverThread->wait();
-    m_solverThread->deleteLater();
-    m_loaderThread->deleteLater();
-    m_saverThread->deleteLater();
-    m_solverThread = m_loaderThread = m_saverThread = nullptr;
+    if (m_solverThread) {
+        m_solverThread->quit();
+        m_solverThread->wait();
+        m_solverThread->deleteLater();
+        m_solverThread = nullptr;
+    }
+    if (m_loaderThread) {
+        m_loaderThread->quit();
+        m_loaderThread->wait();
+        m_loaderThread->deleteLater();
+        m_loaderThread = nullptr;
+    }
+    if (m_saverThread) {
+        m_saverThread->quit();
+        m_saverThread->wait();
+        m_saverThread->deleteLater();
+        m_saverThread = nullptr;
+    }
     m_solver = nullptr;
     m_loader = nullptr;
     m_saver = nullptr;
     m_cameraRestored = false;
 }
 
-void MainWindow::initNewWorld(const QString &seed, bool fromOverlay) {
+// Внимание: вызывающий код обязан сначала сохранить текущий мир (saveCurrentWorld),
+// потому что здесь старый WorldManager уничтожается вместе с движком.
+void MainWindow::initNewWorld(const QString &seed, int difficulty) {
     QString worldsDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/worlds";
-    QString folderName = QDateTime::currentDateTime().toString("yyyy-MM-dd_HHmmss");
+    QString folderName = uniqueWorldFolderName(worldsDir);
     QString worldPath = worldsDir + "/" + folderName;
+
+    const int level = WorldManager::clampDifficulty(difficulty);
 
     WorldInfo info;
     info.seed = seed;
     info.originalName = folderName;
-    info.lastViewX = 0;
-    info.lastViewY = 0;
+    info.lastViewX = 0.0;
+    info.lastViewY = 0.0;
     info.lastScale = 1.0;
+    info.difficulty = level;
+    info.difficultyVersion = WorldManager::DIFFICULTY_SCHEME_VERSION;
     info.gameActive = true;
     info.elapsed = 0;
     info.score = 0;
@@ -307,14 +340,15 @@ void MainWindow::initNewWorld(const QString &seed, bool fromOverlay) {
     World::save(worldPath, info);
 
     Settings::instance().lastWorld = folderName;
-    if (!fromOverlay) saveSettings();
+    Settings::instance().difficulty = level;
+    saveSettings();
 
     if (m_wm) {
         stopEngine();
         m_wm->deleteLater();
     }
 
-    m_wm = new WorldManager(seed, Settings::instance().difficulty, this);
+    m_wm = new WorldManager(seed, level, this);
     m_field->setWorldManager(m_wm);
     m_currentWorldDir = worldPath;
     m_currentSeed = seed;
@@ -323,17 +357,26 @@ void MainWindow::initNewWorld(const QString &seed, bool fromOverlay) {
     m_score = 0;
     m_gameTimer.invalidate();
 
+    // новый мир всегда открывается в начале координат
     m_restoreScale = 1.0;
-    m_restoreCellX = 0;
-    m_restoreCellY = 0;
+    m_restoreCellX = 0.0;
+    m_restoreCellY = 0.0;
+    scheduleCameraRestore();
 }
 
+// Внимание: вызывающий код обязан сначала сохранить текущий мир (saveCurrentWorld).
 void MainWindow::loadWorld(const QString &worldPath) {
     WorldInfo info = World::load(worldPath);
     if (info.seed.isEmpty()) {
-        initNewWorld(World::generateSeed());
+        initNewWorld(World::generateSeed(), Settings::instance().difficulty);
         return;
     }
+
+    // Сложность берём из самого мира; для самых старых сохранений — из настроек.
+    const int level = worldHasDifficulty(info)
+        ? migratedDifficulty(info)
+        : WorldManager::clampDifficulty(Settings::instance().difficulty);
+    Settings::instance().difficulty = level;
 
     m_currentWorldDir = worldPath;
     m_currentSeed = info.seed;
@@ -342,47 +385,86 @@ void MainWindow::loadWorld(const QString &worldPath) {
         m_wm->deleteLater();
     }
 
-    m_wm = new WorldManager(info.seed, Settings::instance().difficulty, this);
+    m_wm = new WorldManager(info.seed, level, this);
     m_field->setWorldManager(m_wm);
 
-    m_gameStarted = info.gameActive;
     m_elapsedOffset = info.elapsed;
     m_flagsPlaced = static_cast<int>(info.flagsPlaced);
-    m_score = static_cast<int>(info.score);
+    m_score = static_cast<qint64>(info.score);
     m_gamePaused = !info.gameActive;
     if (m_gamePaused) {
         m_gameStarted = false;
+        m_gameTimer.invalidate();
     } else {
-        m_gameStarted = info.gameActive;
-        if (m_gameStarted)
-            m_gameTimer.start();
-        else
-            m_gameTimer.invalidate();
+        m_gameStarted = true;
+        m_gameTimer.start();
     }
 
-    m_restoreScale = info.lastScale;
+    m_restoreScale = info.lastScale > 0.0 ? info.lastScale : 1.0;
     m_restoreCellX = info.lastViewX;
     m_restoreCellY = info.lastViewY;
+    scheduleCameraRestore();
 }
 
 void MainWindow::saveCurrentWorld() {
-    if (m_wm && !m_currentWorldDir.isEmpty()) {
-        WorldInfo info = World::load(m_currentWorldDir);
-        QPointF center = m_field->screenToCell(m_field->rect().center());
-        info.lastViewX = static_cast<qint64>(qFloor(center.x()));
-        info.lastViewY = static_cast<qint64>(qFloor(center.y()));
-        info.lastScale = m_field->scale();
-        info.score = m_score;
-        info.elapsed = m_elapsedOffset + (m_gameTimer.isValid() ? m_gameTimer.elapsed() : 0);
-        info.gameActive = m_wm->isGameActive() && m_gameStarted;
-        info.flagsPlaced = m_flagsPlaced;
-        World::save(m_currentWorldDir, info);
-    }
+    if (!m_wm || m_currentWorldDir.isEmpty()) return;
+
+    // Сначала останавливаем незаконченное открытие клеток: всё, что стояло
+    // в очереди, станет ACTIVE и сохранится вместе с миром. Очки за уже
+    // открытые клетки успеваем учесть.
+    interruptReveal();
+    applyPendingOpens();
+
+    // Затем синхронно сбрасываем регионы на диск. Без этого при быстром
+    // переключении миров успевал записаться только world.ini, а состояния
+    // клеток оставались в памяти и терялись вместе со старым миром.
+    flushRegions();
+
+    WorldInfo info = World::load(m_currentWorldDir);
+    const QPointF center = m_field->screenToCell(QPointF(m_field->rect().center()));
+    info.lastViewX = center.x();
+    info.lastViewY = center.y();
+    info.lastScale = m_field->scale();
+    info.score = m_score;
+    info.elapsed = m_elapsedOffset + (m_gameTimer.isValid() ? m_gameTimer.elapsed() : 0);
+    info.gameActive = m_wm->isGameActive() && m_gameStarted;
+    info.flagsPlaced = m_flagsPlaced;
+    info.difficulty = m_wm->difficulty();
+    info.difficultyVersion = WorldManager::DIFFICULTY_SCHEME_VERSION;
+    World::save(m_currentWorldDir, info);
+}
+
+void MainWindow::interruptReveal() {
+    if (!m_solver) return;
+    // Возврат означает, что поток обработки освободился и регион больше не меняется.
+    m_solver->requestCancel();
+}
+
+bool MainWindow::flushRegions() {
+    if (!m_saver) return false;
+    // Поток сохранения уже остановлен — блокирующий вызов повесил бы UI.
+    if (m_saverThread && !m_saverThread->isRunning()) return false;
+    if (QThread::currentThread() == m_saver->thread())
+        return QMetaObject::invokeMethod(m_saver, "saveNow", Qt::DirectConnection);
+    return QMetaObject::invokeMethod(m_saver, "saveNow", Qt::BlockingQueuedConnection);
+}
+
+void MainWindow::applyPendingOpens() {
+    if (!m_solver || !m_wm) return;
+    const int opened = m_solver->takeOpenedTotal();
+    if (opened > 0)
+        m_score += Scoring::revealScore(opened, m_wm->difficulty());
+    if (m_score < 0) m_score = 0;
 }
 
 void MainWindow::saveSettings() {
     QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/settings.ini";
     Settings::instance().save(path);
+}
+
+void MainWindow::scheduleCameraRestore() {
+    m_cameraRestored = false;
+    QTimer::singleShot(0, this, &MainWindow::restoreCamera);
 }
 
 void MainWindow::onFirstClick() {
@@ -394,6 +476,9 @@ void MainWindow::onFirstClick() {
 
 void MainWindow::updateCounters() {
     if (!m_wm) return;
+
+    // Очки за клетки, открытые решателем в фоновом потоке
+    applyPendingOpens();
 
     // --- Время ---
     QString timeStr;
@@ -428,19 +513,17 @@ void MainWindow::updateCounters() {
     m_timeWidget->setValue(timeStr);
 
     // --- Очки ---
-    qint64 score = m_score;
-    QString scoreStr;
-    if (score < 1000) {
-        scoreStr = QString("%1").arg(score, 3, 10, QChar(' '));
-    } else {
-        scoreStr = QString::number(score);
-    }
-    m_scoreWidget->setValue(scoreStr);
+    m_scoreWidget->setValue(Scoring::format(m_score));
 
     int opened, flagged;
     m_wm->countStats(opened, flagged);
-    QString status = QString("Сложность: %1 | Флажков: %2 | Открыто: %3")
-                         .arg(m_wm->difficulty()).arg(m_flagsPlaced).arg(opened);
+    const QString density = QString::number(m_wm->mineProbability() * 100.0, 'f', 1) + "%";
+    const QString status = QString("Сложность: %1/%2 | Плотность мин: %3 | Флажков: %4 | Открыто: %5")
+                               .arg(m_wm->difficulty())
+                               .arg(WorldManager::MAX_DIFFICULTY)
+                               .arg(density)
+                               .arg(m_flagsPlaced)
+                               .arg(opened);
     statusBar()->showMessage(status);
 
     if (m_smileSprites.size() >= 5) {
@@ -453,12 +536,10 @@ void MainWindow::updateCounters() {
     m_field->update();
 }
 
-void MainWindow::onCellsOpened(int count) {
+void MainWindow::onMineExploded() {
     if (!m_wm) return;
-    int diff = m_wm->difficulty();
-    if (diff > 0) {
-        m_score += count * diff / 10;
-    }
+    m_score -= Scoring::minePenalty(m_wm->difficulty());
+    if (m_score < 0) m_score = 0;
 }
 
 void MainWindow::onFlagToggled(int delta) {
@@ -501,55 +582,51 @@ void MainWindow::onSmileReleased() {
 }
 
 void MainWindow::onSmileClicked() {
-    // При нажатии смайлика перезапускаем с новой сложностью (из поля, если открыто) и случайным сидом
-    int diff = Settings::instance().difficulty;
-    if (m_overlay && m_overlay->isVisible() && m_diffEdit) {
-        bool ok;
-        int val = m_diffEdit->text().toInt(&ok);
-        if (ok && val > 0) diff = val;
-    }
-    // генерируем случайный сид
-    QString newSeed = World::generateSeed();
-    // сохраняем текущий мир
+    // Смайлик перезапускает игру: та же сложность, новый случайный сид.
+    const int diff = panelDifficulty(Settings::instance().difficulty);
+    const QString newSeed = World::generateSeed();
+
     saveCurrentWorld();
-    // создаём новый мир
     stopEngine();
     if (m_wm) {
         m_wm->deleteLater();
         m_wm = nullptr;
     }
-    initNewWorld(newSeed, false);
+    initNewWorld(newSeed, diff);
     startEngine();
-    // если overlay открыт, обновим поле сида
-    if (m_overlay && m_overlay->isVisible() && m_seedEdit) {
-        m_seedEdit->setText(newSeed);
+
+    if (m_settingsPanel) {
+        m_settingsPanel->setSeed(newSeed);
+        m_settingsPanel->setDifficulty(Settings::instance().difficulty);
+        m_settingsPanel->clearWarnings();
+        m_diffChanged = false;
         m_seedChanged = false;
-        hideWarningLabels();
     }
 }
 
 void MainWindow::onSaveFinished() {
     if (m_restartAfterSave) {
         m_restartAfterSave = false;
+        // Сохраняем текущий мир до того, как остановим движок.
+        saveCurrentWorld();
         stopEngine();
         if (m_wm) {
             m_wm->deleteLater();
             m_wm = nullptr;
         }
-        // Используем текущие настройки из overlay (если открыт) или из Settings
-        int diff = Settings::instance().difficulty;
+        const int diff = panelDifficulty(Settings::instance().difficulty);
         QString seed = World::generateSeed();
-        if (m_overlay && m_overlay->isVisible()) {
-            bool ok;
-            int val = m_diffEdit->text().toInt(&ok);
-            if (ok && val > 0) diff = val;
-            seed = m_seedEdit->text().trimmed();
+        if (m_settingsPanel) {
+            seed = m_settingsPanel->seedEdit()->text().trimmed();
             if (seed.isEmpty()) seed = World::generateSeed();
         }
-        // создаём новый мир с этими параметрами
-        initNewWorld(seed, true);
+        initNewWorld(seed, diff);
         startEngine();
-        hideWarningLabels();
+        if (m_settingsPanel) {
+            m_settingsPanel->setSeed(m_currentSeed);
+            m_settingsPanel->setDifficulty(Settings::instance().difficulty);
+            m_settingsPanel->clearWarnings();
+        }
     }
 }
 
@@ -558,14 +635,20 @@ void MainWindow::showSaveIndicator() {
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+    // saveCurrentWorld сам прерывает открытие клеток и сбрасывает регионы на диск
     saveCurrentWorld();
 
     Settings::instance().windowSize = size();
     Settings::instance().maximized = isMaximized();
     saveSettings();
 
-    emit requestSave();
     event->accept();
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    if (m_overlay)
+        m_overlay->setGeometry(rect());
 }
 
 void MainWindow::keyPressEvent(QKeyEvent *event) {
@@ -573,6 +656,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
         if (m_overlay) {
             m_overlay->deleteLater();
             m_overlay = nullptr;
+            m_settingsPanel = nullptr;
         } else {
             setupOverlay();
         }
@@ -584,8 +668,17 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
     QMainWindow::keyPressEvent(event);
 }
 
-// -------------------- Overlay --------------------
-// В setupOverlay() – переделано окно параметров
+// -------------------- Окно настроек --------------------
+int MainWindow::panelDifficulty(int fallback) const {
+    if (!m_settingsPanel) return WorldManager::clampDifficulty(fallback);
+
+    bool ok = false;
+    const int val = m_settingsPanel->difficultyEdit()->text().toInt(&ok);
+    if (!ok || val < WorldManager::MIN_DIFFICULTY || val > WorldManager::MAX_DIFFICULTY)
+        return WorldManager::clampDifficulty(fallback);
+    return WorldManager::clampDifficulty(val);
+}
+
 void MainWindow::setupOverlay() {
     if (m_overlay) {
         m_overlay->raise();
@@ -593,251 +686,139 @@ void MainWindow::setupOverlay() {
         return;
     }
 
+    // Затемнение поверх окна; панель настроек растягивается вместе с ним
+    // и ужимается до минимума, после чего включается прокрутка.
     m_overlay = new QFrame(this);
-    m_overlay->setStyleSheet("background-color: rgba(0,0,0,150);");
+    m_overlay->setObjectName("settingsOverlay");
+    m_overlay->setStyleSheet("QFrame#settingsOverlay { background-color: rgba(0,0,0,150); }");
     m_overlay->setGeometry(rect());
-    m_overlay->show();
-    m_overlay->raise();
 
-    // Главная рамка – выпуклая
-    QFrame *mainFrame = new QFrame(m_overlay);
-    mainFrame->setFrameStyle(QFrame::Panel | QFrame::Raised);
-    mainFrame->setLineWidth(2);
-    QColor bgColor = m_themeColors.size() > 0 ? m_themeColors[0] : palette().window().color();
-    mainFrame->setStyleSheet(QString("background-color: %1;").arg(bgColor.name()));
-    mainFrame->setFixedSize(650, 350);
-    mainFrame->move((width() - 650) / 2, (height() - 350) / 2);
-    mainFrame->show();
-    mainFrame->raise();
+    QGridLayout *overlayLayout = new QGridLayout(m_overlay);
+    overlayLayout->setContentsMargins(16, 16, 16, 16);
+    overlayLayout->setSpacing(0);
 
-    QVBoxLayout *mainLayout = new QVBoxLayout(mainFrame);
-    mainLayout->setContentsMargins(0,0,0,0);
-    mainLayout->setSpacing(0);
+    m_settingsPanel = new SettingsPanel(m_overlay);
+    overlayLayout->addWidget(m_settingsPanel, 0, 0);
+    overlayLayout->setRowStretch(0, 1);
+    overlayLayout->setColumnStretch(0, 1);
 
-    // Верхняя панель с градиентом
-    QFrame *titleFrame = new QFrame(mainFrame);
-    titleFrame->setMaximumHeight(24);
-    titleFrame->setFrameStyle(QFrame::StyledPanel | QFrame::Raised);
-    QColor gradStart = m_themeColors.size() > 8 ? m_themeColors[8] : QColor(0,0,128);
-    QColor gradEnd = m_themeColors.size() > 9 ? m_themeColors[9] : QColor(100,149,237);
-    QString gradStyle = QString("QFrame { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 %1, stop:1 %2); }")
-                            .arg(gradStart.name(), gradEnd.name());
-    titleFrame->setStyleSheet(gradStyle);
-    QHBoxLayout *titleLayout = new QHBoxLayout(titleFrame);
-    titleLayout->setContentsMargins(8,2,2,2);
-    titleLayout->setSpacing(0);
+    // Значения ставим до подключения сигналов, чтобы не дёргать обработчики зря
+    m_settingsPanel->setDifficulty(Settings::instance().difficulty);
+    m_settingsPanel->setSeed(m_currentSeed);
+    m_settingsPanel->themeCombo()->setCurrentText(Settings::instance().theme);
+    applyPanelTheme();
 
-    QLabel *titleLabel = new QLabel("Параметры", titleFrame);
-    titleLabel->setStyleSheet("color: white; font-weight: bold; background: transparent;");
-    titleLayout->addWidget(titleLabel);
+    connect(m_settingsPanel, &SettingsPanel::closeRequested, this, &MainWindow::onOverlayClose);
+    connect(m_settingsPanel->difficultyEdit(), &QLineEdit::textChanged, this, &MainWindow::onDifficultyTextChanged);
+    connect(m_settingsPanel->seedEdit(), &QLineEdit::textChanged, this, &MainWindow::onSeedTextChanged);
+    connect(m_settingsPanel->themeCombo(), &QComboBox::currentTextChanged, this, &MainWindow::onThemeChanged);
+    connect(m_settingsPanel->regenerateButton(), &QPushButton::clicked, this, &MainWindow::onRegenerateWorld);
+    connect(m_settingsPanel->loadWorldButton(), &QPushButton::clicked, this, &MainWindow::onLoadWorld);
 
-    titleLayout->addStretch();
-
-    // Кнопка закрытия со спрайтами
-    QPushButton *closeBtn = new QPushButton(titleFrame);
-    closeBtn->setFixedSize(16, 14);
-    // загружаем спрайты из той же темы
-    QString theme = Settings::instance().theme;
-    QString path = QString(":/themes/%1.bmp").arg(theme);
-    QPixmap sheet(path);
-    if (sheet.isNull()) sheet.load("sprites/" + theme + ".bmp");
-    if (!sheet.isNull()) {
-        QPixmap normal = sheet.copy(120, 39, 16, 14);
-        QPixmap pressed = sheet.copy(136, 39, 16, 14);
-        QIcon icon;
-        icon.addPixmap(normal, QIcon::Normal);
-        icon.addPixmap(pressed, QIcon::Active);
-        icon.addPixmap(pressed, QIcon::Selected);
-        closeBtn->setIcon(icon);
-        closeBtn->setIconSize(QSize(16,14));
-    }
-    closeBtn->setStyleSheet("border: none; background: transparent;");
-    connect(closeBtn, &QPushButton::clicked, this, &MainWindow::onOverlayClose);
-    titleLayout->addWidget(closeBtn);
-
-    mainLayout->addWidget(titleFrame);
-
-    // Содержимое – без отступов
-    QFrame *contentFrame = new QFrame(mainFrame);
-    contentFrame->setFrameStyle(QFrame::NoFrame);
-    QHBoxLayout *contentLayout = new QHBoxLayout(contentFrame);
-    contentLayout->setContentsMargins(0,0,0,0);
-    contentLayout->setSpacing(0);   // плотно
-
-    // Левая колонка (настройки)
-    QFrame *leftCol = new QFrame(contentFrame);
-    leftCol->setFrameStyle(QFrame::NoFrame);
-    QVBoxLayout *leftLayout = new QVBoxLayout(leftCol);
-    leftLayout->setContentsMargins(10,10,10,10);
-    leftLayout->setSpacing(8);
-
-    // Сложность
-    QHBoxLayout *diffLayout = new QHBoxLayout();
-    QLabel *diffLabel = new QLabel("Сложность", leftCol);
-    diffLabel->setStyleSheet("background: transparent; border: none;");
-    diffLabel->setFixedWidth(80);
-    m_diffEdit = new QLineEdit(leftCol);
-    m_diffEdit->setText(QString::number(Settings::instance().difficulty));
-    m_diffEdit->setStyleSheet("border: 1px inset gray; background: white;");
-    connect(m_diffEdit, &QLineEdit::textChanged, this, &MainWindow::onDifficultyTextChanged);
-    diffLayout->addWidget(diffLabel);
-    diffLayout->addWidget(m_diffEdit);
-    leftLayout->addLayout(diffLayout);
-
-    m_warnDiff = new QLabel("⚠ Изменения вступят в силу только для следующего мира", leftCol);
-    m_warnDiff->setStyleSheet("color: red; font-size: 8pt; background: transparent; border: none;");
-    m_warnDiff->setVisible(false);
-    leftLayout->addWidget(m_warnDiff);
-
-    // Сид
-    QHBoxLayout *seedLayout = new QHBoxLayout();
-    QLabel *seedLabel = new QLabel("Сид мира", leftCol);
-    seedLabel->setStyleSheet("background: transparent; border: none;");
-    seedLabel->setFixedWidth(80);
-    m_seedEdit = new QLineEdit(leftCol);
-    m_seedEdit->setText(m_currentSeed);
-    m_seedEdit->setStyleSheet("border: 1px inset gray; background: white;");
-    connect(m_seedEdit, &QLineEdit::textChanged, this, &MainWindow::onSeedTextChanged);
-    seedLayout->addWidget(seedLabel);
-    seedLayout->addWidget(m_seedEdit);
-    leftLayout->addLayout(seedLayout);
-
-    m_warnSeed = new QLabel("⚠ Изменения вступят в силу только для следующего мира", leftCol);
-    m_warnSeed->setStyleSheet("color: red; font-size: 8pt; background: transparent; border: none;");
-    m_warnSeed->setVisible(false);
-    leftLayout->addWidget(m_warnSeed);
-
-    // Тема
-    QHBoxLayout *themeLayout = new QHBoxLayout();
-    QLabel *themeLabel = new QLabel("Тема", leftCol);
-    themeLabel->setStyleSheet("background: transparent; border: none;");
-    themeLabel->setFixedWidth(80);
-    m_themeCombo = new QComboBox(leftCol);
-    m_themeCombo->addItem("light");
-    m_themeCombo->addItem("dark");
-    m_themeCombo->setCurrentText(Settings::instance().theme);
-    m_themeCombo->setStyleSheet("border: 1px inset gray; background: white;");
-    connect(m_themeCombo, &QComboBox::currentTextChanged, this, &MainWindow::onThemeChanged);
-    themeLayout->addWidget(themeLabel);
-    themeLayout->addWidget(m_themeCombo);
-    leftLayout->addLayout(themeLayout);
-
-    leftLayout->addStretch();
-
-    m_regenerateBtn = new QPushButton("Пересоздать мир", leftCol);
-    m_regenerateBtn->setStyleSheet("border: 2px outset gray; background: lightgray;");
-    connect(m_regenerateBtn, &QPushButton::clicked, this, &MainWindow::onRegenerateWorld);
-    leftLayout->addWidget(m_regenerateBtn);
-
-    contentLayout->addWidget(leftCol, 2);
-
-    // Правая колонка (миры)
-    QFrame *rightCol = new QFrame(contentFrame);
-    rightCol->setFrameStyle(QFrame::NoFrame);
-    QVBoxLayout *rightLayout = new QVBoxLayout(rightCol);
-    rightLayout->setContentsMargins(10,10,10,10);
-    rightLayout->setSpacing(8);
-
-    QLabel *worldsLabel = new QLabel("Миры", rightCol);
-    worldsLabel->setStyleSheet("background: transparent; border: none;");
-    rightLayout->addWidget(worldsLabel);
-
-    m_worldListView = new QListView(rightCol);
-    m_worldListModel = new QStringListModel(this);
-    m_worldListView->setModel(m_worldListModel);
-    m_worldListView->setStyleSheet("border: 1px inset gray; background: white;");
-    rightLayout->addWidget(m_worldListView);
-
-    m_loadWorldBtn = new QPushButton("Загрузить", rightCol);
-    m_loadWorldBtn->setStyleSheet("border: 2px outset gray; background: lightgray;");
-    connect(m_loadWorldBtn, &QPushButton::clicked, this, &MainWindow::onLoadWorld);
-    rightLayout->addWidget(m_loadWorldBtn);
-
-    contentLayout->addWidget(rightCol, 1);
-
-    mainLayout->addWidget(contentFrame);
-
-    // ... остальное (список миров, скрытие предупреждений)
     updateWorldList();
-    hideWarningLabels();
     m_diffChanged = false;
     m_seedChanged = false;
+    onDifficultyTextChanged(m_settingsPanel->difficultyEdit()->text());
+    onSeedTextChanged(m_settingsPanel->seedEdit()->text());
+
+    m_overlay->show();
+    m_overlay->raise();
 }
 
 void MainWindow::onOverlayClose() {
     if (m_overlay) {
         m_overlay->deleteLater();
         m_overlay = nullptr;
+        m_settingsPanel = nullptr;
     }
 }
 
 void MainWindow::onDifficultyTextChanged(const QString &text) {
-    bool ok;
-    int val = text.toInt(&ok);
-    if (ok && val > 0) {
-        m_diffChanged = true;
-        m_warnDiff->setVisible(true);
+    if (!m_settingsPanel) return;
+
+    bool ok = false;
+    const int val = text.toInt(&ok);
+    const bool valid = ok && val >= WorldManager::MIN_DIFFICULTY && val <= WorldManager::MAX_DIFFICULTY;
+
+    if (valid) {
+        const QString density = QString::number(WorldManager::mineProbabilityFor(val) * 100.0, 'f', 1) + "%";
+        m_settingsPanel->setDifficultyInfo(QString("Плотность мин на этом уровне: %1").arg(density));
+        if (val <= 0)
+            m_settingsPanel->setDifficultyInfo(QString("Плотность мин на этом уровне: %1, очки не начисляются")
+                                                   .arg(density));
     } else {
-        m_warnDiff->setVisible(false);
+        m_settingsPanel->setDifficultyInfo("Уровень 0 — базовый, выше — плотнее, ниже — разреженнее");
+    }
+
+    if (!valid) {
+        m_settingsPanel->setDifficultyWarning(text.isEmpty()
+            ? QString()
+            : QString("⚠ Допустимо от %1 до %2")
+                  .arg(WorldManager::MIN_DIFFICULTY)
+                  .arg(WorldManager::MAX_DIFFICULTY));
         m_diffChanged = false;
+        return;
+    }
+
+    if (val != Settings::instance().difficulty) {
+        m_diffChanged = true;
+        m_settingsPanel->setDifficultyWarning("⚠ Изменения вступят в силу только для следующего мира");
+    } else {
+        m_diffChanged = false;
+        m_settingsPanel->setDifficultyWarning(QString());
     }
 }
 
 void MainWindow::onSeedTextChanged(const QString &text) {
+    if (!m_settingsPanel) return;
+
     if (text != m_currentSeed) {
         m_seedChanged = true;
-        m_warnSeed->setVisible(true);
+        m_settingsPanel->setSeedWarning("⚠ Изменения вступят в силу только для следующего мира");
     } else {
         m_seedChanged = false;
-        m_warnSeed->setVisible(false);
+        m_settingsPanel->setSeedWarning(QString());
     }
 }
 
 void MainWindow::onThemeChanged(const QString &theme) {
     Settings::instance().theme = theme;
     saveSettings();
-    loadThemeColors();
-    applyTheme();
-    // тема применяется сразу
+    applyTheme();   // спрайтлист, палитра и стили перечитываются целиком
 }
 
 void MainWindow::onRegenerateWorld() {
     // Сохраняем текущий мир
     saveCurrentWorld();
 
-    // Читаем сложность и сид из полей
-    bool ok;
-    int diff = m_diffEdit->text().toInt(&ok);
-    if (!ok || diff <= 0) diff = Settings::instance().difficulty;
-    QString seed = m_seedEdit->text().trimmed();
+    const int diff = panelDifficulty(Settings::instance().difficulty);
+    QString seed = m_settingsPanel ? m_settingsPanel->seedEdit()->text().trimmed() : QString();
     if (seed.isEmpty()) seed = World::generateSeed();
 
-    // Применяем сложность в настройки
-    Settings::instance().difficulty = diff;
-    saveSettings();
-
-    // Пересоздаём мир
+    // Пересоздаём мир с новыми параметрами
     stopEngine();
     if (m_wm) {
         m_wm->deleteLater();
         m_wm = nullptr;
     }
-    initNewWorld(seed, true);
+    initNewWorld(seed, diff);
     startEngine();
 
-    // Обновляем список миров (может появиться новая папка)
+    // Обновляем список миров (появилась новая папка) и поля
     updateWorldList();
-
-    // Скрываем предупреждения
-    hideWarningLabels();
+    if (m_settingsPanel) {
+        m_settingsPanel->setSeed(m_currentSeed);
+        m_settingsPanel->setDifficulty(Settings::instance().difficulty);
+        m_settingsPanel->clearWarnings();
+    }
     m_diffChanged = false;
     m_seedChanged = false;
 }
 
 void MainWindow::onLoadWorld() {
-    QModelIndex idx = m_worldListView->currentIndex();
-    if (!idx.isValid()) return;
-    QString folder = m_worldListModel->data(idx, Qt::DisplayRole).toString();
+    if (!m_settingsPanel) return;
+
+    const QString folder = m_settingsPanel->selectedWorld();
     if (folder.isEmpty()) return;
 
     QString worldsDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/worlds";
@@ -847,44 +828,31 @@ void MainWindow::onLoadWorld() {
     // Сохраняем текущий мир
     saveCurrentWorld();
 
-    // Загружаем выбранный
+    // Загружаем выбранный: позиция и сложность берутся из его сохранения
     loadWorld(worldPath);
     startEngine();
 
-    // Обновляем настройки
     Settings::instance().lastWorld = folder;
     saveSettings();
 
-    // Обновляем поле сида в overlay
-    if (m_seedEdit) {
-        m_seedEdit->setText(m_currentSeed);
-        m_seedChanged = false;
-    }
-    hideWarningLabels();
+    // Обновляем поля панели
+    m_settingsPanel->setSeed(m_currentSeed);
+    m_settingsPanel->setDifficulty(Settings::instance().difficulty);
+    m_settingsPanel->clearWarnings();
+    m_diffChanged = false;
+    m_seedChanged = false;
 
-    // Обновляем список и выделение
     updateWorldList();
+    onDifficultyTextChanged(m_settingsPanel->difficultyEdit()->text());
+    onSeedTextChanged(m_settingsPanel->seedEdit()->text());
 }
 
 void MainWindow::updateWorldList() {
+    if (!m_settingsPanel) return;
+
     QString worldsDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/worlds";
-    QDir dir(worldsDir);
-    QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    m_worldListModel->setStringList(dirs);
-
-    // Выделяем текущий мир
-    QString current = Settings::instance().lastWorld;
-    if (!current.isEmpty()) {
-        int row = dirs.indexOf(current);
-        if (row >= 0) {
-            m_worldListView->setCurrentIndex(m_worldListModel->index(row));
-        }
-    }
-}
-
-void MainWindow::hideWarningLabels() {
-    if (m_warnDiff) m_warnDiff->setVisible(false);
-    if (m_warnSeed) m_warnSeed->setVisible(false);
+    QStringList dirs = QDir(worldsDir).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    m_settingsPanel->setWorldList(dirs, Settings::instance().lastWorld);
 }
 
 void MainWindow::adjustWindowSizeForStatusBar(bool show) {

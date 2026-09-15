@@ -13,11 +13,34 @@ class WorldManager : public QObject
 {
     Q_OBJECT
 public:
+    // Сложность — это уровень, где 0 — базовая (около 9.8% мин), выше — плотнее,
+    // ниже нуля — разреженнее. Экспоненциальная шкала между MIN и MAX.
+    static constexpr int MIN_DIFFICULTY = -4;
+    static constexpr int MAX_DIFFICULTY = 5;
+    static constexpr int DEFAULT_DIFFICULTY = 2;   // ≈ плотность старого значения 1/6
+
+    // Версия схемы сложности:
+    //   0 — старое значение было знаменателем плотности (1/N мин);
+    //   1 — уровни 1..10 (плотность от 4% до 30%);
+    //   2 — текущая шкала: уровень 0 = бывший уровень 5, то есть сдвиг на -5.
+    static constexpr int DIFFICULTY_SCHEME_VERSION = 2;
+    static constexpr int LEVEL_SCHEME_OFFSET = 5;
+
+    static int clampDifficulty(int difficulty) { return qBound(MIN_DIFFICULTY, difficulty, MAX_DIFFICULTY); }
+    // Перевод старого уровня 1..10 в текущую шкалу.
+    static int fromLevelScheme(int level) { return level - LEVEL_SCHEME_OFFSET; }
+    // Вероятность мины для уровня. Экспоненциальный рост между MIN и MAX,
+    // считается один раз и дальше используется как порог в isMine().
+    static double mineProbabilityFor(int difficulty);
+    // Обратное преобразование: ближайший уровень для заданной плотности мин.
+    static int difficultyForProbability(double probability);
+
     explicit WorldManager(const QString &seed, int difficulty, QObject *parent = nullptr);
 
     void setSeed(const QString &seed);
     QString seed() const { return m_seed; }
     int difficulty() const { return m_difficulty; }
+    double mineProbability() const { return m_mineProbability; }
 
     bool isMine(int64_t x, int64_t y) const;
     CellState cellStateAt(int64_t x, int64_t y) const;
@@ -48,12 +71,19 @@ public:
 signals:
     void chunkNeeded(int64_t chunkX, int64_t chunkY);
     void requestSave();   // emitted when too many dirty chunks
+    void mineExploded();  // игрок открыл мину
 
 private:
     static constexpr int REGION_SHIFT = 10;
     static constexpr int CHUNK_SHIFT  = 4;
     static constexpr int MAX_CACHE    = 4096;
     static constexpr double DIRTY_SAVE_TRIGGER = 0.8;
+
+    // Границы плотности мин для уровней 1 и MAX_DIFFICULTY.
+    static constexpr double MIN_MINE_PROBABILITY = 0.04;
+    static constexpr double MAX_MINE_PROBABILITY = 0.30;
+    // Порог сравнения с хешем: h % CHANCE_SCALE < m_mineChanceNumerator
+    static constexpr uint64_t CHANCE_SCALE = 100000;
 
     int64_t chunkIdx(int64_t cell) const { return cell >> CHUNK_SHIFT; }
     int64_t regionIdx(int64_t cell) const { return cell >> REGION_SHIFT; }
@@ -69,6 +99,8 @@ private:
 
     QString m_seed;
     int m_difficulty;
+    double m_mineProbability = 0.0;
+    uint64_t m_mineChanceNumerator = 0;
     bool m_gameActive = true;
 
     uint64_t m_hash = 0;
