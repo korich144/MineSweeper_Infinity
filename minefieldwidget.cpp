@@ -63,16 +63,23 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
     int64_t maxX = static_cast<int64_t>(qCeil(bottomRight.x())) + 1;
     int64_t maxY = static_cast<int64_t>(qCeil(bottomRight.y())) + 1;
 
-    int64_t chunkMinX = minX >> 4;
-    int64_t chunkMinY = minY >> 4;
-    int64_t chunkMaxX = maxX >> 4;
-    int64_t chunkMaxY = maxY >> 4;
+    const int64_t visMinCX = minX >> 4;
+    const int64_t visMinCY = minY >> 4;
+    const int64_t visMaxCX = maxX >> 4;
+    const int64_t visMaxCY = maxY >> 4;
 
-    for (int64_t cy = chunkMinY; cy <= chunkMaxY; ++cy) {
-        for (int64_t cx = chunkMinX; cx <= chunkMaxX; ++cx) {
+    // Обходим не только видимые чанки, но и PRELOAD_CHUNKS в каждую сторону:
+    // их заранее заказываем у загрузчика. Рисуем при этом только видимые.
+    for (int64_t cy = visMinCY - PRELOAD_CHUNKS; cy <= visMaxCY + PRELOAD_CHUNKS; ++cy) {
+        for (int64_t cx = visMinCX - PRELOAD_CHUNKS; cx <= visMaxCX + PRELOAD_CHUNKS; ++cx) {
+            const bool onScreen = (cx >= visMinCX && cx <= visMaxCX &&
+                                   cy >= visMinCY && cy <= visMaxCY);
+
             auto chunk = m_wm->getChunkUnsafe(cx, cy);
             if (!chunk) {
                 m_wm->requestChunk(cx, cy);
+                if (!onScreen) continue;
+
                 for (int i = 0; i < 16; ++i) {
                     for (int j = 0; j < 16; ++j) {
                         int64_t cellX = (cx << 4) + i;
@@ -84,6 +91,8 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
                     }
                 }
             } else {
+                if (!onScreen) continue;
+
                 for (int i = 0; i < 16; ++i) {
                     for (int j = 0; j < 16; ++j) {
                         int64_t cellX = (cx << 4) + i;

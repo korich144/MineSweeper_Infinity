@@ -38,6 +38,7 @@ void Settings::load(const QString &path) {
     if (o.contains("windowSize")) {
         QJsonObject sz = o.value("windowSize").toObject();
         windowSize = QSize(sz.value("width").toInt(800), sz.value("height").toInt(600));
+        hasWindowSize = true;
     }
     showStatusBar = o.value("showStatusBar").toBool(false);
 }

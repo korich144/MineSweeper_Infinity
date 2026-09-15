@@ -82,6 +82,7 @@ private:
     bool flushRegions();                   // синхронно пишет грязные регионы на диск
     void adjustWindowSizeForStatusBar(bool show);
     void scheduleCameraRestore();          // восстановление камеры после перезагрузки мира
+    void applyDefaultWindowSize();         // первый запуск: окно ровно под 9x9 клеток
     int  panelDifficulty(int fallback) const;  // сложность из панели или запасное значение
     QIcon loadCloseIcon() const;
 
@@ -108,6 +109,9 @@ private:
     bool m_restartAfterSave = false;
 
     bool m_cameraRestored = false;
+    // Новый мир открывается так, чтобы клетка (0,0) была ровно в углу поля:
+    // клетки прилегают к рамке без половинок.
+    bool m_restoreAlignsToOrigin = false;
     double m_restoreScale = 1.0;
     double m_restoreCellX = 0.0;
     double m_restoreCellY = 0.0;

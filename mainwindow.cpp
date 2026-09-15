@@ -153,6 +153,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_coordLabel = new QLabel("X: 0 Y: 0", this);
     statusBar()->addPermanentWidget(m_coordLabel);
     statusBar()->setVisible(m_statusBarVisible);
+
+    // Если размер окна нигде не сохранён (первый запуск) — подгоняем его так,
+    // чтобы в поле помещалось ровно 9x9 клеток.
+    if (!Settings::instance().hasWindowSize)
+        QTimer::singleShot(0, this, &MainWindow::applyDefaultWindowSize);
 }
 
 MainWindow::~MainWindow() {
@@ -357,10 +362,12 @@ void MainWindow::initNewWorld(const QString &seed, int difficulty) {
     m_score = 0;
     m_gameTimer.invalidate();
 
-    // новый мир всегда открывается в начале координат
+    // новый мир всегда открывается в начале координат, прижатым к левому
+    // верхнему углу поля
     m_restoreScale = 1.0;
     m_restoreCellX = 0.0;
     m_restoreCellY = 0.0;
+    m_restoreAlignsToOrigin = true;
     scheduleCameraRestore();
 }
 
@@ -403,6 +410,7 @@ void MainWindow::loadWorld(const QString &worldPath) {
     m_restoreScale = info.lastScale > 0.0 ? info.lastScale : 1.0;
     m_restoreCellX = info.lastViewX;
     m_restoreCellY = info.lastViewY;
+    m_restoreAlignsToOrigin = false;
     scheduleCameraRestore();
 }
 
@@ -556,7 +564,28 @@ void MainWindow::restoreCamera() {
     m_cameraRestored = true;
     m_field->setOffset(0, 0);
     m_field->setScale(m_restoreScale);
+    if (m_restoreAlignsToOrigin)
+        return;      // новый мир: клетка (0,0) уже в левом верхнем углу поля
     m_field->centerOn(m_restoreCellX, m_restoreCellY);
+}
+
+// Первый запуск (размера окна в настройках нет): подгоняем окно так, чтобы
+// поле было ровно 9x9 клеток. Обвес окна (рамка поля, шапка, отступы) измеряем
+// по текущей геометрии, а не считаем константами раскладки.
+void MainWindow::applyDefaultWindowSize() {
+    if (isMaximized() || !m_field) return;
+
+    const int chromeW = width() - m_field->width();
+    const int chromeH = height() - m_field->height();
+    if (chromeW <= 0 || chromeH <= 0) return;   // раскладка ещё не посчитана
+
+    const int cellSize = qMax(1, qRound(16 * m_field->scale()));
+    const int fieldSide = MinefieldWidget::DEFAULT_FIELD_CELLS * cellSize;
+    resize(fieldSide + chromeW, fieldSide + chromeH);
+
+    // Размер поля стал кратен клетке — прижимаем камеру к началу координат,
+    // чтобы клетки прилегали к рамке ровно.
+    m_field->setOffset(0, 0);
 }
 
 void MainWindow::toggleStatusBar() {

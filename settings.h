@@ -15,6 +15,9 @@ public:
     int difficulty = 2;
     QString theme = "light";
     QSize windowSize{800, 600};
+    // Был ли в файле настроек сохранён размер окна. Если нет (первый запуск),
+    // окно подгоняется под ровно 9x9 клеток.
+    bool hasWindowSize = false;
     bool maximized = false;
     bool showStatusBar = false;
     QString lastWorld;

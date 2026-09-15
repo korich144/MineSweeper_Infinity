@@ -13,6 +13,9 @@ class MinefieldWidget : public QWidget
 {
     Q_OBJECT
 public:
+    // Сколько клеток по стороне должно помещаться в поле при первом запуске.
+    static constexpr int DEFAULT_FIELD_CELLS = 9;
+
     explicit MinefieldWidget(QWidget *parent = nullptr);
 
     void setWorldManager(WorldManager *wm) { m_wm = wm; }
@@ -39,6 +42,10 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
 
 private:
+    // Сколько чанков за пределами экрана просим у загрузчика заранее,
+    // чтобы при прокрутке не было пустых полос.
+    static constexpr int PRELOAD_CHUNKS = 3;
+
     QPointF cellToScreen(double cx, double cy) const;
 
     WorldManager *m_wm = nullptr;
