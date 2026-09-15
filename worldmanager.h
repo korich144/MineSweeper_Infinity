@@ -7,7 +7,35 @@
 #include <QList>
 #include <memory>
 #include <set>
+#include <vector>
 #include "chunk.h"
+
+// Одно изменение клетки в пачке (см. applyRevealBatch).
+struct RevealUpdate {
+    int64_t x = 0;
+    int64_t y = 0;
+    CellState state = CellState::CLOSED;
+};
+
+// Окно 3x3 чанков вокруг заданного. Решатель держит его, чтобы читать клетки
+// и соседей без блокировки на каждую клетку: блокировка берётся один раз
+// при переходе в новый чанк.
+struct ChunkWindow {
+    int64_t chunkX = 0;
+    int64_t chunkY = 0;
+    bool ready = false;          // центральный чанк загружен
+    std::shared_ptr<Chunk> center;
+    std::shared_ptr<Chunk> ring[3][3];   // ring[dy+1][dx+1], центр не используется
+
+    // Сосед ли это чанк окна (для клеток на краю чанка), иначе — центральный.
+    std::shared_ptr<Chunk> chunkAt(int64_t chunkX_, int64_t chunkY_) const {
+        if (chunkX_ == chunkX && chunkY_ == chunkY) return center;
+        const int64_t dx = chunkX_ - chunkX;
+        const int64_t dy = chunkY_ - chunkY;
+        if (dx < -1 || dx > 1 || dy < -1 || dy > 1) return nullptr;
+        return ring[dy + 1][dx + 1];
+    }
+};
 
 class WorldManager : public QObject
 {
@@ -49,6 +77,18 @@ public:
     void setCellStateIfLoaded(int64_t x, int64_t y, CellState state);
     void setMine(int64_t x, int64_t y);
 
+    // Записывает пачку изменений под одной блокировкой. Порядок важен:
+    // если для клетки есть несколько записей, побеждает последняя.
+    // Виртуальный: решатель вызывает его единственным для записи ходов игры.
+    virtual void applyRevealBatch(const std::vector<RevealUpdate> &updates);
+
+    // Заполняет окно 3x3 чанков под одной блокировкой чтения.
+    void loadWindow(int64_t chunkX, int64_t chunkY, ChunkWindow &window) const;
+
+    // Отмечает чанк изменённым (блокировка берётся внутри). Решатель вызывает
+    // это один раз на чанк, а не на каждую клетку.
+    void markChunkDirty(const std::shared_ptr<Chunk> &chunk);
+
     bool revealCell(int64_t x, int64_t y);
     void requestChunk(int64_t chunkX, int64_t chunkY);
 
@@ -89,13 +129,18 @@ private:
     int64_t regionIdx(int64_t cell) const { return cell >> REGION_SHIFT; }
 
     std::shared_ptr<Chunk> getOrCreateChunk(int64_t cx, int64_t cy);
-    void touchChunk(const ChunkCoord &coord);
-    void evictOneIfNeeded();
-    void checkDirtyRatio();
+    void touchChunk(const std::shared_ptr<Chunk> &chunk);
+    void evictIfNeeded();
+    // Учёт изменений чанка. Версия с суффиксом Locked требует уже взятой блокировки.
+    void markChunkDirtyLocked(const std::shared_ptr<Chunk> &chunk);
+    void checkDirtyRatioLocked();
 
     mutable QReadWriteLock m_lock;
     QHash<ChunkCoord, std::shared_ptr<Chunk>> m_chunks;
-    QList<ChunkCoord> m_lru;
+
+    int64_t m_useCounter = 0;   // для вытеснения по давности
+    int m_dirtyCount = 0;       // сколько чанков сейчас грязные
+    bool m_saveRequested = false;
 
     QString m_seed;
     int m_difficulty;

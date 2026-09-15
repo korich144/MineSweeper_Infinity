@@ -7,8 +7,8 @@
 #include <QMutex>
 #include <QWaitCondition>
 #include <atomic>
-
-class WorldManager;
+#include <vector>
+#include "worldmanager.h"
 
 class Solver : public QObject
 {
@@ -36,24 +36,31 @@ public:
 signals:
     void finished();
 
+protected:
+    // Единственная точка записи хода игры. Виртуальная: через неё тесты
+    // сверяют порядок открытия клеток с исходным рекурсивным алгоритмом.
+    virtual void writeCell(ChunkWindow &window, int64_t x, int64_t y, CellState state);
+
 private:
     // Единый цикл обработки очереди: рекурсии нет, поэтому открытие можно
     // прервать в любой момент, а стек не переполняется на больших разлётах.
     void runQueue();
     bool isCancelled() const { return m_cancelRequested.load(); }
-    // Клетка ещё не отбработана, но уже в очереди — значит, ждёт открытия.
+    // Клетки, которые ждали открытия, но не дождались, сохраняем как ACTIVE.
     void markPendingAsActive();
 
-    void processCell(int64_t x, int64_t y);
+    // Открывает одну клетку. Соседи кладутся в стек в обратном порядке,
+    // поэтому обход идёт вглубь ровно так же, как в исходной рекурсии.
+    void processCell(int64_t x, int64_t y, ChunkWindow &window);
     int countNeighborMines(int64_t x, int64_t y);
 
     WorldManager *m_wm;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_cancelRequested{false};
     QMutex m_queueMutex;
-    QSet<QPair<int64_t, int64_t>> m_activeQueue;   // наполняется из потока загрузчика
-    QSet<QPair<int64_t, int64_t>> m_pending;       // трогает только поток обработки
-    std::atomic<int> m_openedTotal{0};             // забирает поток UI
+    QSet<QPair<int64_t, int64_t>> m_activeQueue;        // наполняется из потока загрузчика
+    std::vector<std::pair<int64_t, int64_t>> m_pending; // стек обхода, только поток обработки
+    std::atomic<int> m_openedTotal{0};                  // забирает поток UI
 
     // Для ожидания завершения обработки при прерывании.
     QMutex m_idleMutex;

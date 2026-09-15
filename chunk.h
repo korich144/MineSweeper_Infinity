@@ -30,6 +30,8 @@ struct Chunk {
     CellState cells[16][16];
     bool mine[16][16];
     bool dirty = false;
+    // Метка последнего обращения — по ней вытесняется самый старый чанк.
+    int64_t useStamp = 0;
 
     Chunk() {
         memset(cells, 0, sizeof(cells));
