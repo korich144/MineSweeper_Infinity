@@ -167,6 +167,51 @@ void WorldManager::loadWindow(int64_t chunkX, int64_t chunkY, ChunkWindow &windo
         }
 }
 
+WorldManager::ChordAction WorldManager::chordAction(int64_t x, int64_t y,
+                                                   std::vector<QPair<int64_t, int64_t>> &targets) const {
+    targets.clear();
+
+    QReadLocker locker(&m_lock);
+    const CellState st = cellStateAtUnsafe(x, y);
+    if (st < CellState::OPENED_8 || st > CellState::OPENED_0)
+        return ChordAction::None;   // «помощник» работает только по открытой цифре
+
+    const int number = 15 - static_cast<int>(st);
+    std::vector<QPair<int64_t, int64_t>> closed;
+    int flags = 0;
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            const int64_t nx = x + dx;
+            const int64_t ny = y + dy;
+            const CellState ns = cellStateAtUnsafe(nx, ny);
+            if (ns == CellState::FLAGGED)
+                ++flags;
+            else if (ns == CellState::CLOSED)
+                closed.push_back({nx, ny});
+        }
+    }
+
+    if (closed.empty())
+        return ChordAction::None;   // вокруг всё уже решено
+
+    // Флажков ровно по цифре — открываем оставшихся закрытых соседей.
+    if (flags == number) {
+        targets.swap(closed);
+        return ChordAction::Reveal;
+    }
+
+    // Закрытых соседей ровно столько, сколько флажков не хватает до цифры,
+    // значит все они мины — помечаем их.
+    if (flags + static_cast<int>(closed.size()) == number) {
+        targets.swap(closed);
+        return ChordAction::Flag;
+    }
+
+    return ChordAction::None;
+}
+
 bool WorldManager::revealCell(int64_t x, int64_t y) {
     if (!m_gameActive) return false;
     if (isMine(x, y)) {

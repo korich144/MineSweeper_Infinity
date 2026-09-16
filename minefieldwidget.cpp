@@ -191,6 +191,56 @@ void MinefieldWidget::mouseReleaseEvent(QMouseEvent *event) {
     }
 }
 
+// «Помощник»: двойной клик по открытой цифре.
+//   * флажков вокруг ровно по цифре — открываем оставшихся закрытых соседей
+//     (если среди них окажется мина, флажок стоял неверно, игра заканчивается);
+//   * флажков вместе с закрытыми соседями ровно по цифре — значит закрытые
+//     соседи и есть мины, помечаем их флажками.
+void MinefieldWidget::mouseDoubleClickEvent(QMouseEvent *event) {
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mouseDoubleClickEvent(event);
+        return;
+    }
+
+    m_pressedCell = std::nullopt;
+    update();
+
+    if (!m_wm || !m_wm->isGameActive()) return;
+
+    const QPointF cell = screenToCell(event->pos());
+    const int64_t cx = static_cast<int64_t>(qFloor(cell.x()));
+    const int64_t cy = static_cast<int64_t>(qFloor(cell.y()));
+
+    std::vector<QPair<int64_t, int64_t>> targets;
+    switch (m_wm->chordAction(cx, cy, targets)) {
+    case WorldManager::ChordAction::Reveal:
+        for (const auto &target : targets) {
+            if (!m_wm->isGameActive()) break;
+            if (!m_wm->revealCell(target.first, target.second)) break;   // попали на мину
+            emit firstClick();
+            emit startReveal(target.first, target.second);
+        }
+        break;
+
+    case WorldManager::ChordAction::Flag: {
+        int placed = 0;
+        for (const auto &target : targets) {
+            if (m_wm->cellStateAt(target.first, target.second) != CellState::CLOSED)
+                continue;
+            m_wm->setCellState(target.first, target.second, CellState::FLAGGED);
+            ++placed;
+        }
+        if (placed > 0)
+            emit flagToggled(placed);
+        break;
+    }
+
+    case WorldManager::ChordAction::None:
+        break;
+    }
+    update();
+}
+
 void MinefieldWidget::mouseMoveEvent(QMouseEvent *event) {
     if (m_dragging) {
         QPointF delta = event->pos() - m_dragStartPos;

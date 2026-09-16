@@ -92,6 +92,19 @@ public:
     bool revealCell(int64_t x, int64_t y);
     void requestChunk(int64_t chunkX, int64_t chunkY);
 
+    // «Помощник» по двойному клику на открытую клетку.
+    enum class ChordAction {
+        None,     // условие не выполнено — ничего не делаем
+        Reveal,   // флажков ровно по цифре — открыть оставшихся закрытых соседей
+        Flag      // флажки плюс закрытые соседи дают цифру — поставить на них флажки
+    };
+
+    // Определяет, что делать по двойному клику, и заполняет targets:
+    // для Reveal — закрытые соседи, для Flag — те, что надо пометить.
+    // Флажки и клетки с вопросом в targets не попадают, сама клетка тоже.
+    ChordAction chordAction(int64_t x, int64_t y,
+                            std::vector<QPair<int64_t, int64_t>> &targets) const;
+
     std::shared_ptr<Chunk> getChunk(int64_t chunkX, int64_t chunkY);
     void addLoadedChunk(std::shared_ptr<Chunk> chunk);
     void fixupChunkCells(std::shared_ptr<Chunk> chunk);
