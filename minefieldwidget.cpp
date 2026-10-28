@@ -339,6 +339,23 @@ void MinefieldWidget::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void MinefieldWidget::wheelEvent(QWheelEvent *event) {
+    // Колесо мыши даёт только угловую дельту (шаги по 120), прецизионный
+    // тачпад — ещё и пиксельную. По ней их и различаем: двумя пальцами поле
+    // двигается в любую сторону, колесом — меняется масштаб. Ctrl оставлен
+    // за масштабом: им же к нам приходят и щипки тачпада.
+    const QPoint pixelDelta = event->pixelDelta();
+    const bool touchpadScroll = !pixelDelta.isNull() || event->phase() != Qt::NoScrollPhase;
+
+    if (touchpadScroll && !(event->modifiers() & Qt::ControlModifier)) {
+        // Как в обычном списке: прокрутка вниз показывает то, что ниже, то есть
+        // поле уезжает вверх. Естественная прокрутка («палец — за контентом»)
+        // учитывается системой сама. Инерция после отпускания пальцев идёт
+        // теми же событиями с фазой ScrollMomentum и попадает сюда же.
+        m_offset -= QPointF(pixelDelta);
+        update();
+        return;
+    }
+
     QPointF mousePos = event->position();
     QPointF worldBefore = screenToCell(mousePos);   // старый масштаб!
     double factor = 1.0 + event->angleDelta().y() / 1200.0;
