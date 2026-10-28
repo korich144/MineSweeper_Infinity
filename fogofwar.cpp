@@ -70,12 +70,16 @@ void FogMap::setTheme(const QVector<QPixmap> &cellSprites, const QColor &fogColo
 void FogMap::update(int64_t minX, int64_t minY, int64_t maxX, int64_t maxY) {
     if (!m_wm) return;
 
-    // Расстояние считается до ближайшей открытой клетки, в том числе за
-    // пределами экрана, поэтому запрошенный прямоугольник расширяем на радиус.
-    const int64_t reqMinX = minX - CLEAR_RADIUS;
-    const int64_t reqMinY = minY - CLEAR_RADIUS;
-    const int64_t reqMaxX = maxX + CLEAR_RADIUS;
-    const int64_t reqMaxY = maxY + CLEAR_RADIUS;
+    // Расстояние считается до ближайшей открытой клетки, в том числе лежащей
+    // за пределами запрошенной области. Влиять на стадию могут клетки на
+    // расстоянии до 8 (4 клетки чистой зоны + 4 стадии перехода), поэтому
+    // расширяем ровно на 8: меньше — и внешнее кольцо области считалось бы
+    // сплошным туманом, даже если рядом за границей есть открытые клетки.
+    const int64_t pad = CLEAR_RADIUS + TRANSITION_STAGES;
+    const int64_t reqMinX = minX - pad;
+    const int64_t reqMinY = minY - pad;
+    const int64_t reqMaxX = maxX + pad;
+    const int64_t reqMaxY = maxY + pad;
 
     const bool inside = m_valid &&
                         reqMinX >= m_minX && reqMinY >= m_minY &&

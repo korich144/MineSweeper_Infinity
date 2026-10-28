@@ -136,7 +136,7 @@ void WorldManager::markChunkDirtyLocked(const std::shared_ptr<Chunk> &chunk) {
     // Через эту функцию проходит любое изменение клетки, поэтому здесь же
     // растёт ревизия поля: без неё туман отставал бы от открытых клеток.
     bumpFieldRevision();
-    chunk->useStamp = ++m_useCounter;
+    chunk->useStamp = m_useCounter.fetch_add(1, std::memory_order_relaxed) + 1;
     if (!chunk->dirty) {
         chunk->dirty = true;
         ++m_dirtyCount;
@@ -428,7 +428,7 @@ std::shared_ptr<Chunk> WorldManager::getOrCreateChunk(int64_t cx, int64_t cy) {
 void WorldManager::touchChunk(const std::shared_ptr<Chunk> &chunk) {
     // O(1): раньше здесь был линейный поиск и удаление из списка LRU,
     // а вызывалось это на каждую изменённую клетку.
-    chunk->useStamp = ++m_useCounter;
+    chunk->useStamp = m_useCounter.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
 void WorldManager::evictIfNeeded() {

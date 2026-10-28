@@ -5,12 +5,16 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QtMath>
+#include <cstring>
 
 MinefieldWidget::MinefieldWidget(QWidget *parent)
     : QWidget(parent)
 {
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
+    // Отрисовка всегда закрашивает виджет целиком (цветом тумана или тайлами),
+    // поэтому Qt не обязан под каждым кадром заливать фон своим цветом.
+    setAttribute(Qt::WA_OpaquePaintEvent, true);
     m_offset = QPointF(0, 0);
     m_clickTimer.start();
     m_scrollClock.start();
@@ -18,8 +22,12 @@ MinefieldWidget::MinefieldWidget(QWidget *parent)
 
 void MinefieldWidget::setWorldManager(WorldManager *wm) {
     m_wm = wm;
-    // Посчитанный туман принадлежит прошлому миру и его ревизии.
+    // Посчитанный туман и тайлы принадлежат прошлому миру.
     m_fog.setWorldManager(wm);
+    m_tiles.clear();
+    m_requested.clear();
+    m_paintedRevision = 0;
+    m_forceRepaint = true;
 }
 
 void MinefieldWidget::setTheme(const QString &themeName) {
@@ -40,6 +48,8 @@ void MinefieldWidget::setTheme(const QString &themeName) {
 
     // Клетки в тумане смешиваются с его цветом один раз на тему, а не на кадр.
     m_fog.setTheme(m_cellSprites, ThemePalette::fromSheet(sheet).fog);
+    ++m_themeGen;
+    m_scaledForScale = -1.0;   // предмасштабированные спрайты устарели
     update();
 }
 
@@ -66,17 +76,178 @@ void MinefieldWidget::centerOn(double x, double y) {
     update();
 }
 
+bool MinefieldWidget::hasPendingVisuals() const {
+    return m_forceRepaint || (m_wm && m_wm->fieldRevision() != m_paintedRevision);
+}
+
 void MinefieldWidget::shiftByCells(int64_t dx, int64_t dy) {
     const double cell = 16 * m_scale;
     m_offset += QPointF(dx * cell, dy * cell);
 }
 
+void MinefieldWidget::ensureScaledSprites() {
+    if (!m_scaledSprites.isEmpty() && m_scaledForScale == m_scale) return;
+
+    const int side = spriteSide();
+    m_scaledSprites.clear();
+    m_scaledSprites.reserve(16 * FogMap::TRANSITION_STAGES);
+    for (int s = 0; s < 16; ++s) {
+        for (int stage = 0; stage < FogMap::TRANSITION_STAGES; ++stage) {
+            const QPixmap &src = (stage == 0)
+                ? m_cellSprites[s]
+                : m_fog.sprite(static_cast<CellState>(s), stage);
+            // Без сглаживания — как и при обычной отрисовке; FastTransformation
+            // даёт те же пиксели, что и масштабирование на лету.
+            m_scaledSprites.append(src.isNull()
+                ? QPixmap()
+                : src.scaled(side, side, Qt::IgnoreAspectRatio, Qt::FastTransformation));
+        }
+    }
+    m_scaledForScale = m_scale;
+}
+
+void MinefieldWidget::drawCell(QPainter &p, int64_t cellX, int64_t cellY, CellState st,
+                               int64_t illumX, int64_t illumY, bool pressed) {
+    const int stage = cellFogStage(cellX, cellY, illumX, illumY);
+    if (stage >= FogMap::TRANSITION_STAGES) return;   // уже залито цветом тумана
+
+    // Спрайты взяты на пиксель крупнее точного размера клетки: соседние клетки
+    // чуть перекрываются, зато между ними не появляется щелей.
+    const QPointF sp = cellToScreen(cellX, cellY);
+    p.drawPixmap(sp, m_scaledSprites[static_cast<int>(st) * 4 + stage]);
+    if (pressed) {
+        const double cell = 16.0 * m_scale;
+        p.fillRect(QRectF(sp, QSizeF(cell, cell)), QColor(0, 0, 0, 64));
+    }
+}
+
+void MinefieldWidget::requestMissingChunk(int64_t chunkX, int64_t chunkY) {
+    const ChunkCoord coord(chunkX, chunkY);
+    if (m_requested.contains(coord)) return;
+    m_requested.insert(coord);
+    m_wm->requestChunk(chunkX, chunkY);
+}
+
+int MinefieldWidget::tileChunks() const {
+    const double cell = 16.0 * m_scale;
+    if (cell >= 8.0) return 1;
+    if (cell >= 4.0) return 2;
+    return MAX_TILE_CHUNKS;
+}
+
+int64_t MinefieldWidget::floorDiv(int64_t a, int64_t b) {
+    int64_t q = a / b;
+    if (a % b != 0 && (a < 0) != (b < 0)) --q;
+    return q;
+}
+
+void MinefieldWidget::collectTileStamps(int64_t *stamps,
+                                        int64_t tileX, int64_t tileY, int tileChunks) const {
+    // Блок чанков тайла плюс кольцо соседей: открытая клетка в соседнем чанке
+    // меняет туман у края тайла, значит тайл должен перестроиться.
+    const int stride = TILE_STAMP_SIDE;
+    for (int dy = -1; dy <= tileChunks; ++dy) {
+        for (int dx = -1; dx <= tileChunks; ++dx) {
+            const auto chunk = m_wm->getChunkUnsafe(tileX * tileChunks + dx,
+                                                    tileY * tileChunks + dy);
+            stamps[(dy + 1) * stride + (dx + 1)] = chunk ? chunk->useStamp : 0;
+        }
+    }
+}
+
+const QImage &MinefieldWidget::tilePixmap(int64_t tileX, int64_t tileY) {
+    const int tc = tileChunks();
+    const double cell = 16.0 * m_scale;
+    const int cells = tc * 16;
+    // На пиксель больше точного размера блока: крайние клетки перекрывают
+    // границу тайла, а не обрезаются.
+    const int side = qCeil(cells * cell) + 1;
+    const int64_t tileBytes = int64_t(side) * side * 4;
+
+    int64_t stamps[TILE_STAMP_SIDE * TILE_STAMP_SIDE];
+    collectTileStamps(stamps, tileX, tileY, tc);
+
+    const ChunkCoord coord(tileX, tileY);
+    ChunkTile &tile = m_tiles[coord];
+    tile.lastUse = ++m_tileUseCounter;
+
+    bool fresh = !tile.pixmap.isNull() && tile.pixmap.width() == side
+        && tile.scale == m_scale && tile.themeGen == m_themeGen && tile.tileChunks == tc;
+    for (int i = 0; fresh && i < TILE_STAMP_SIDE * TILE_STAMP_SIDE; ++i)
+        if (tile.stamps[i] != stamps[i]) { fresh = false; break; }
+    if (fresh) return tile.pixmap;
+
+    // Клетки 4-й стадии — сплошной цвет тумана, поэтому тайл целиком заливается
+    // им, а такие клетки просто пропускаются. RGB32 — формат без альфы: для
+    // растеризатора это гарантия непрозрачности, и блит тайла превращается
+    // в простое копирование без попиксельного смешивания.
+    if (tile.pixmap.width() != side)
+        tile.pixmap = QImage(side, side, QImage::Format_RGB32);
+    tile.pixmap.fill(m_fog.color());
+
+    QPainter tp(&tile.pixmap);
+    tp.setRenderHint(QPainter::SmoothPixmapTransform, false);
+    for (int scy = 0; scy < tc; ++scy) {
+        for (int scx = 0; scx < tc; ++scx) {
+            const auto chunk = m_wm->getChunkUnsafe(tileX * tc + scx, tileY * tc + scy);
+            const int baseX = scx * 16;
+            const int baseY = scy * 16;
+            for (int i = 0; i < 16; ++i) {
+                for (int j = 0; j < 16; ++j) {
+                    const CellState st = chunk ? chunk->cells[i][j] : CellState::CLOSED;
+                    const int64_t worldX = (tileX * tc + scx) * 16 + i;
+                    const int64_t worldY = (tileY * tc + scy) * 16 + j;
+                    const int stage = m_fog.stageAt(worldX, worldY);
+                    if (stage >= FogMap::TRANSITION_STAGES) continue;
+                    tp.drawPixmap(QPointF((baseX + i) * cell, (baseY + j) * cell),
+                                  m_scaledSprites[static_cast<int>(st) * 4 + stage]);
+                }
+            }
+        }
+    }
+    tp.end();
+
+    tile.scale = m_scale;
+    tile.themeGen = m_themeGen;
+    tile.tileChunks = tc;
+    memcpy(tile.stamps, stamps, sizeof(stamps));
+    evictTilesIfNeeded(tileBytes);
+    return tile.pixmap;
+}
+
+void MinefieldWidget::evictTilesIfNeeded(int64_t tileBytes) {
+    int64_t maxTiles = TILE_BUDGET_BYTES / qMax<int64_t>(tileBytes, 1);
+    maxTiles = qBound<int64_t>(int64_t(16), maxTiles, int64_t(8192));
+    if (m_tiles.size() <= maxTiles) return;
+
+    // Освобождаем сразу десятую часть, чтобы не сканировать кэш на каждом тайле.
+    const int64_t target = maxTiles * 9 / 10;
+    while (m_tiles.size() > target) {
+        ChunkCoord oldest;
+        int64_t oldestUse = 0;
+        bool found = false;
+        for (auto it = m_tiles.cbegin(); it != m_tiles.cend(); ++it) {
+            if (!found || it->lastUse < oldestUse) {
+                oldestUse = it->lastUse;
+                oldest = it.key();
+                found = true;
+            }
+        }
+        if (!found) break;
+        m_tiles.remove(oldest);
+    }
+}
+
 void MinefieldWidget::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::SmoothPixmapTransform, false);
-    p.fillRect(rect(), Qt::darkGray);
 
-    if (!m_wm || m_cellSprites.size() < 16) return;
+    if (!m_wm || m_cellSprites.size() < 16) {
+        p.fillRect(rect(), Qt::darkGray);
+        return;
+    }
+
+    ensureScaledSprites();
 
     QPointF topLeft = screenToCell(QPointF(0, 0));
     QPointF bottomRight = screenToCell(QPointF(width(), height()));
@@ -85,78 +256,114 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
     int64_t maxX = static_cast<int64_t>(qCeil(bottomRight.x())) + 1;
     int64_t maxY = static_cast<int64_t>(qCeil(bottomRight.y())) + 1;
 
-    m_fog.update(minX, minY, maxX, maxY);
-
-    // Клетки 4-й стадии — сплошной цвет тумана, поэтому всё поле заливается
-    // им сразу, а сами клетки в цикле пропускаются.
-    p.fillRect(rect(), m_fog.color());
-
-    const QPair<int64_t, int64_t> illum = illuminationCell();
-    const int64_t illumX = illum.first;
-    const int64_t illumY = illum.second;
-
-    auto drawCell = [&](int64_t cellX, int64_t cellY, CellState st) {
-        const int stage = cellFogStage(cellX, cellY, illumX, illumY);
-        if (stage >= FogMap::TRANSITION_STAGES) return;   // уже залито туманом
-
-        QPointF sp = cellToScreen(cellX, cellY);
-        QRectF targetRect(sp, QSizeF(16 * m_scale, 16 * m_scale));
-        const QPixmap &sprite = (stage == 0)
-            ? m_cellSprites[static_cast<int>(st)]
-            : m_fog.sprite(st, stage);
-
-        bool pressed = m_pressedCell.has_value() &&
-                       m_pressedCell->first == cellX && m_pressedCell->second == cellY;
-        if (pressed && st == CellState::CLOSED) {
-            QPixmap tinted = sprite;
-            QPainter pixp(&tinted);
-            pixp.fillRect(tinted.rect(), QColor(0, 0, 0, 64));
-            pixp.end();
-            p.drawPixmap(targetRect, tinted, QRectF(0,0,16,16));
-        } else {
-            p.drawPixmap(targetRect, sprite, QRectF(0,0,16,16));
-        }
-    };
-
     const int64_t visMinCX = minX >> 4;
     const int64_t visMinCY = minY >> 4;
     const int64_t visMaxCX = maxX >> 4;
     const int64_t visMaxCY = maxY >> 4;
 
+    // В тайловом пути заливка не нужна: тайлы непрозрачны и накрывают весь
+    // виджет целиком. Она нужна прямому пути — там клетки 4-й стадии
+    // пропускаются, и сквозь них должен быть виден цвет тумана.
+    const bool tiled = 16.0 * m_scale <= MAX_TILED_CELL_PX;
+
+    // Туману нужен запас: тайлы выступают за экран на размер блока чанков,
+    // а стадия клетки зависит от открытых клеток в 8 клетках от неё — их
+    // добавит сам FogMap.
+    const int64_t pad = int64_t(tiled ? tileChunks() : 1) * 16;
+    m_fog.update(minX - pad, minY - pad, maxX + pad, maxY + pad);
+
+    const QPair<int64_t, int64_t> illum = illuminationCell();
+    const int64_t illumX = illum.first;
+    const int64_t illumY = illum.second;
+
     // Обходим не только видимые чанки, но и PRELOAD_CHUNKS в каждую сторону:
-    // их заранее заказываем у загрузчика. Рисуем при этом только видимые.
+    // их заранее заказываем у загрузчика — один раз, а не каждый кадр.
     for (int64_t cy = visMinCY - PRELOAD_CHUNKS; cy <= visMaxCY + PRELOAD_CHUNKS; ++cy) {
         for (int64_t cx = visMinCX - PRELOAD_CHUNKS; cx <= visMaxCX + PRELOAD_CHUNKS; ++cx) {
-            const bool onScreen = (cx >= visMinCX && cx <= visMaxCX &&
-                                   cy >= visMinCY && cy <= visMaxCY);
-
             auto chunk = m_wm->getChunkUnsafe(cx, cy);
-            if (!chunk) {
-                m_wm->requestChunk(cx, cy);
-                if (!onScreen) continue;
+            if (chunk)
+                m_requested.remove(ChunkCoord(cx, cy));
+            else
+                requestMissingChunk(cx, cy);
+        }
+    }
 
+    if (tiled) {
+        // Кадр — блиты готовых тайлов. Перерисовывается только тайл, у
+        // которого изменился какой-то из его чанков или соседних с ними —
+        // от них зависит туман на клетках тайла.
+        //
+        // Позиция округляется до целых: субпиксельный блит — это попиксельный
+        // цикл, а сдвиг на полпикселя глаз не отличит. Тайл чуть шире своего
+        // блока, поэтому стыки накрываются соседними тайлами: они рисуются
+        // слева направо и сверху вниз, каждый следующий перекрывает хвост
+        // предыдущего.
+        //
+        // Тайлы непрозрачны и рисуются первыми, поэтому они копируют себя на
+        // приёмник (Source), а не смешиваются — это заметно быстрее. Режим
+        // возвращается на SourceOver для подсветок поверх тайлов.
+        p.setCompositionMode(QPainter::CompositionMode_Source);
+        const int tc = tileChunks();
+        const int64_t tMinX = floorDiv(visMinCX, tc);
+        const int64_t tMaxX = floorDiv(visMaxCX, tc);
+        const int64_t tMinY = floorDiv(visMinCY, tc);
+        const int64_t tMaxY = floorDiv(visMaxCY, tc);
+        for (int64_t ty = tMinY; ty <= tMaxY; ++ty) {
+            for (int64_t tx = tMinX; tx <= tMaxX; ++tx) {
+                const QPointF spF = cellToScreen(tx * tc * 16.0, ty * tc * 16.0);
+                const QPoint sp(qRound(spF.x()), qRound(spF.y()));
+                const QImage &tile = tilePixmap(tx, ty);
+                p.drawImage(sp, tile);
+            }
+        }
+        p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    } else {
+        for (int64_t cy = visMinCY; cy <= visMaxCY; ++cy) {
+            for (int64_t cx = visMinCX; cx <= visMaxCX; ++cx) {
+                auto chunk = m_wm->getChunkUnsafe(cx, cy);
                 for (int i = 0; i < 16; ++i) {
                     for (int j = 0; j < 16; ++j) {
-                        int64_t cellX = (cx << 4) + i;
-                        int64_t cellY = (cy << 4) + j;
+                        const int64_t cellX = (cx << 4) + i;
+                        const int64_t cellY = (cy << 4) + j;
                         if (cellX < minX || cellX > maxX || cellY < minY || cellY > maxY) continue;
-                        drawCell(cellX, cellY, CellState::CLOSED);
-                    }
-                }
-            } else {
-                if (!onScreen) continue;
-
-                for (int i = 0; i < 16; ++i) {
-                    for (int j = 0; j < 16; ++j) {
-                        int64_t cellX = (cx << 4) + i;
-                        int64_t cellY = (cy << 4) + j;
-                        if (cellX < minX || cellX > maxX || cellY < minY || cellY > maxY) continue;
-                        drawCell(cellX, cellY, chunk->cells[i][j]);
+                        drawCell(p, cellX, cellY, chunk ? chunk->cells[i][j] : CellState::CLOSED,
+                                 illumX, illumY, false);
                     }
                 }
             }
         }
     }
+
+    // Подсветка центра не запекается в тайлы: она держится за центр экрана,
+    // а не за мировые координаты. В прямом пути она уже учтена в drawCell.
+    if (tiled)
+        p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    if (tiled && m_illumination) {
+        const int64_t reach = FogMap::CLEAR_RADIUS + FogMap::TRANSITION_STAGES;
+        for (int64_t cy = illumY - reach; cy <= illumY + reach; ++cy) {
+            for (int64_t cx = illumX - reach; cx <= illumX + reach; ++cx) {
+                auto chunk = m_wm->getChunkUnsafe(cx >> 4, cy >> 4);
+                const CellState st = chunk ? chunk->cells[cx & 15][cy & 15]
+                                           : CellState::CLOSED;
+                drawCell(p, cx, cy, st, illumX, illumY, false);
+            }
+        }
+    }
+
+    // Нажатая клетка подсвечивается поверх тайлов: затемнение одной клетки
+    // дорисовывается каждый кадр, а не запекается в кэш.
+    if (m_pressedCell) {
+        auto chunk = m_wm->getChunkUnsafe(m_pressedCell->first >> 4,
+                                          m_pressedCell->second >> 4);
+        const CellState st = chunk
+            ? chunk->cells[m_pressedCell->first & 15][m_pressedCell->second & 15]
+            : CellState::CLOSED;
+        drawCell(p, m_pressedCell->first, m_pressedCell->second, st,
+                 illumX, illumY, true);
+    }
+
+    m_paintedRevision = m_wm->fieldRevision();
+    m_forceRepaint = false;
 }
 
 QPointF MinefieldWidget::cellToScreen(double cx, double cy) const {

@@ -127,8 +127,12 @@ public:
     uint64_t fieldRevision() const { return m_fieldRevision.load(std::memory_order_relaxed); }
 
     // Отмечает запись клетки, сделанную в обход менеджера: решатель пишет
-    // в чанк напрямую, поэтому о его записях надо сообщать отдельно.
-    void noteCellWritten() { m_fieldRevision.fetch_add(1, std::memory_order_relaxed); }
+    // в чанк напрямую. Поднимает метку чанка — по ней отрисовка видит, что
+    // содержимое чанка изменилось, — и ревизию поля для тумана.
+    void noteCellWritten(Chunk *chunk) {
+        chunk->useStamp = m_useCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+        m_fieldRevision.fetch_add(1, std::memory_order_relaxed);
+    }
 
     // Есть ли в мире хотя бы одна показанная клетка. Нужно, чтобы решить,
     // подсвечивать ли центр экрана до старта игры.
@@ -165,15 +169,17 @@ private:
 
     std::shared_ptr<Chunk> getOrCreateChunk(int64_t cx, int64_t cy);
     void touchChunk(const std::shared_ptr<Chunk> &chunk);
-    void evictIfNeeded();
-    // Учёт изменений чанка. Версия с суффиксом Locked требует уже взятой блокировки.
+    void evictIfNeeded();    // Учёт изменений чанка. Версия с суффиксом Locked требует уже взятой блокировки.
     void markChunkDirtyLocked(const std::shared_ptr<Chunk> &chunk);
     void checkDirtyRatioLocked();
 
     mutable QReadWriteLock m_lock;
     QHash<ChunkCoord, std::shared_ptr<Chunk>> m_chunks;
 
-    int64_t m_useCounter = 0;   // для вытеснения по давности
+    // Счётчик меток чанков: по давности вытесняется кэш, а сама метка служит
+    // отрисовке признаком «содержимое чанка изменилось». Атомарный, потому
+    // что решатель поднимает метки из своего потока без блокировки.
+    std::atomic<int64_t> m_useCounter{0};
     int m_dirtyCount = 0;       // сколько чанков сейчас грязные
     bool m_saveRequested = false;
 

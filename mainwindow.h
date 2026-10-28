@@ -102,12 +102,14 @@ private:
     QString m_currentWorldDir;
     QString m_currentSeed;
     QElapsedTimer m_gameTimer;
+    QElapsedTimer m_statsClock;        // строка состояния обновляется раз в секунду
     qint64 m_elapsedOffset = 0;
     qint64 m_score = 0;
     int m_flagsPlaced = 0;
     bool m_gameStarted = false;
     bool m_gamePaused = false;
     bool m_restartAfterSave = false;
+    bool m_lastIconActive = false;     // какой смайлик уже стоит на кнопке
 
     bool m_cameraRestored = false;
     // Новый мир открывается так, чтобы клетка (0,0) была ровно в углу поля:

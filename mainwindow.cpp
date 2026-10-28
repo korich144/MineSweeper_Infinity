@@ -149,6 +149,7 @@ MainWindow::MainWindow(QWidget *parent)
     QTimer *uiTimer = new QTimer(this);
     connect(uiTimer, &QTimer::timeout, this, &MainWindow::updateCounters);
     uiTimer->start(33);
+    m_statsClock.start();
 
     m_coordLabel = new QLabel("X: 0 Y: 0", this);
     statusBar()->addPermanentWidget(m_coordLabel);
@@ -536,25 +537,35 @@ void MainWindow::updateCounters() {
     // --- Очки ---
     m_scoreWidget->setValue(Scoring::format(m_score));
 
-    int opened, flagged;
-    m_wm->countStats(opened, flagged);
-    const QString density = QString::number(m_wm->mineProbability() * 100.0, 'f', 1) + "%";
-    const QString status = QString("Сложность: %1/%2 | Плотность мин: %3 | Флажков: %4 | Открыто: %5")
-                               .arg(m_wm->difficulty())
-                               .arg(WorldManager::MAX_DIFFICULTY)
-                               .arg(density)
-                               .arg(m_flagsPlaced)
-                               .arg(opened);
-    statusBar()->showMessage(status);
+    // Строка состояния заставляет обойти весь кэш чанков — это дорого, поэтому
+    // раз в секунду, а не 30 раз.
+    if (m_statsClock.elapsed() >= 1000) {
+        m_statsClock.restart();
 
-    if (m_smileSprites.size() >= 5) {
-        if (!m_wm->isGameActive())
-            ui->smileButton->setIcon(QIcon(m_smileSprites[2]));
-        else
-            ui->smileButton->setIcon(QIcon(m_smileSprites[4]));
+        int opened, flagged;
+        m_wm->countStats(opened, flagged);
+        const QString density = QString::number(m_wm->mineProbability() * 100.0, 'f', 1) + "%";
+        const QString status = QString("Сложность: %1/%2 | Плотность мин: %3 | Флажков: %4 | Открыто: %5")
+                                   .arg(m_wm->difficulty())
+                                   .arg(WorldManager::MAX_DIFFICULTY)
+                                   .arg(density)
+                                   .arg(m_flagsPlaced)
+                                   .arg(opened);
+        statusBar()->showMessage(status);
     }
 
-    m_field->update();
+    // Смайлик зависит только от состояния игры: если ставить его каждый тик,
+    // каждые 33 мс создавался новый QIcon из того же пиксмапа.
+    const bool active = m_wm->isGameActive();
+    if (active != m_lastIconActive && m_smileSprites.size() >= 5) {
+        ui->smileButton->setIcon(QIcon(m_smileSprites[active ? 4 : 2]));
+        m_lastIconActive = active;
+    }
+
+    // Поле перерисовывается, только когда мир изменился с последнего кадра:
+    // иначе в простое поле рисовалось 30 раз в секунду впустую.
+    if (m_field->hasPendingVisuals())
+        m_field->update();
 }
 
 void MainWindow::onMineExploded() {
