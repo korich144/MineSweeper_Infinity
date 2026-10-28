@@ -96,7 +96,8 @@
 
 ## Файлы данных
 
-Всё лежит в `%APPDATA%\MineSweeper_Infinity`:
+На Windows всё лежит в `%APPDATA%\MineSweeper_Infinity`, на Linux — в
+`~/.local/share/MineSweeper_Infinity`; набор файлов один и тот же:
 
 - `settings.ini` — сложность, тема, последний мир, размер окна;
 - `worlds/<дата_время>/world.ini` — сид, сложность, счёт, флажки, время, позиция камеры;
@@ -105,8 +106,11 @@
 
 ## Сборка
 
-Qt 6 (Widgets), CMake. Важно: путь к папке проекта — только ASCII, иначе `moc`
-не сможет создать выходные файлы.
+Qt 6 (Widgets), CMake. Код одинаков для Windows и Linux, соберётся любым
+компилятором с C++17.
+
+На Windows путь к папке проекта — только ASCII, иначе `moc` из MinGW не сможет
+создать выходные файлы (на Linux это ограничение не действует).
 
 ```bash
 cmake -S <путь_к_проекту> -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -115,11 +119,33 @@ cmake --build build
 
 Проект удобно собирать через junction с ASCII-путём (например, `C:\u\MineSweeper_Infinity`).
 
+### Сборка под Linux
+
+Ubuntu / Debian — достаточно пакетов:
+
+```bash
+sudo apt install build-essential cmake ninja-build \
+    qt6-base-dev qt6-l10n-tools qt6-tools-dev
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+Замечания:
+
+- ASCII-junction и все обходы путей из Windows-раздела не нужны;
+- строка статуса и миры окажутся в `~/.local/share/MineSweeper_Infinity`;
+- тачпад различается без эвристик: Linux отдаёт прокрутку тачпада с фазами
+  жеста и пиксельной дельтой, поэтому панорамирование работает сразу;
+- проверено на Ubuntu 24.04 (Qt 6.4.2, gcc 13): сборка, все 78 тестов стенда
+  и тайминги кадров совпадают с Windows.
+
 ### Статическая сборка
 
 Такой exe не требует DLL Qt рядом с собой. Обычная сборка (динамический Qt) остаётся
 в корневом `CMakeLists.txt`, статическая описана отдельным проектом
-`static/CMakeLists.txt`; исходный код у них общий.
+`static/CMakeLists.txt`; исходный код у них общий. Сборка ведётся только
+под Windows — на Linux проект `static/` сразу скажет об этом и отошлёт
+к обычной сборке.
 
 ```bash
 scripts/build-static.sh --build-qt   # один раз: собрать статический Qt и приложение

@@ -10,6 +10,11 @@ int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
 
+    // Имя приложения задаём явно: без него путь к данным выводится из имени
+    // бинарника, и переименованный или запущенный через симлинк exe молча
+    // сменил бы папку с мирами и настройками.
+    a.setApplicationName("MineSweeper_Infinity");
+
     QTranslator translator;
     const QStringList uiLanguages = QLocale::system().uiLanguages();
     for (const QString &locale : uiLanguages) {

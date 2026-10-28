@@ -37,6 +37,16 @@ set(CMAKE_EXE_LINKER_FLAGS_PROFILE "" CACHE STRING "Linker flags for Profile bui
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Core Gui)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Core Gui)
 
+# Статический проект заточен под Windows: MinGW, вкомпилированные плагины
+# платформы, проверка exe через objdump. На Linux всё это не нужно — там
+# хватает обычной сборки из корневого CMakeLists.txt.
+if(NOT WIN32)
+    message(FATAL_ERROR
+        "Проект static/ собирается только под Windows.\n"
+        "На Linux используйте корневой CMakeLists.txt:\n"
+        "  cmake -S . -B build && cmake --build build")
+endif()
+
 # Собирать статически имеет смысл только со статическим Qt: с динамическим
 # этот проект даст тот же результат, что и основной, но без переводов.
 get_target_property(QT_CORE_LIBRARY_TYPE Qt${QT_VERSION_MAJOR}::Core TYPE)
