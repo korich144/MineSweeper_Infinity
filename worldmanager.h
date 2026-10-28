@@ -155,7 +155,9 @@ signals:
 private:
     static constexpr int REGION_SHIFT = 10;
     static constexpr int CHUNK_SHIFT  = 4;
-    static constexpr int MAX_CACHE    = 4096;
+    // 8192: на сильном отдалении на экране с предзагрузкой около 3-4 тысяч
+    // чанков, и на старом лимите кэш начинал вытесняться прямо под курсором.
+    static constexpr int MAX_CACHE    = 8192;
     static constexpr double DIRTY_SAVE_TRIGGER = 0.8;
 
     // Границы плотности мин для уровней 1 и MAX_DIFFICULTY.
