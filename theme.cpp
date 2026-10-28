@@ -59,6 +59,9 @@ ThemePalette ThemePalette::fromColors(const QVector<QColor> &colors) {
     p.selectionText  = slot(11).value_or(p.selectionBg.lightness() > 140 ? QColor(Qt::black) : QColor(Qt::white));
     p.warningText    = slot(12).value_or(lightPanel ? QColor(0xC0, 0x00, 0x00) : QColor(0xFF, 0x80, 0x80));
     p.mutedText      = slot(13).value_or(lightPanel ? p.panelBg.darker(150) : p.panelBg.lighter(150));
+    // По умолчанию туман — нарочно заметный зелёный: пока слот не заполнен
+    // в спрайтлисте, его так видно при отладке.
+    p.fog            = slot(14).value_or(QColor(0x00, 0xA0, 0x00));
 
     p.valid = !colors.isEmpty();
     return p;

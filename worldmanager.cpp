@@ -133,6 +133,9 @@ void WorldManager::markChunkDirty(const std::shared_ptr<Chunk> &chunk) {
 
 void WorldManager::markChunkDirtyLocked(const std::shared_ptr<Chunk> &chunk) {
     // Блокировка уже взята вызывающим.
+    // Через эту функцию проходит любое изменение клетки, поэтому здесь же
+    // растёт ревизия поля: без неё туман отставал бы от открытых клеток.
+    bumpFieldRevision();
     chunk->useStamp = ++m_useCounter;
     if (!chunk->dirty) {
         chunk->dirty = true;
@@ -244,11 +247,15 @@ void WorldManager::addLoadedChunk(std::shared_ptr<Chunk> chunk) {
         m_chunks[coord] = chunk;
         touchChunk(chunk);
         evictIfNeeded();
+        // Чанк с диска приносит уже открытые клетки — туман должен их увидеть.
+        bumpFieldRevision();
     }
     fixupChunkCells(chunk);
 }
 
 void WorldManager::fixupChunkCells(std::shared_ptr<Chunk> chunk) {
+    // Функция переписывает состояния клеток — ревизия поля меняется.
+    bumpFieldRevision();
     for (int y = 0; y < 16; ++y) {
         for (int x = 0; x < 16; ++x) {
             CellState &st = chunk->cells[x][y];
@@ -348,6 +355,60 @@ void WorldManager::countStats(int &opened, int &flagged) const {
     }
 }
 
+bool WorldManager::hasOpenedCells() const {
+    QReadLocker locker(&m_lock);
+    for (auto it = m_chunks.cbegin(); it != m_chunks.cend(); ++it) {
+        const auto &cells = it.value()->cells;
+        for (int i = 0; i < 16; ++i) {
+            for (int j = 0; j < 16; ++j) {
+                const CellState s = cells[i][j];
+                // Показанной считается открытая цифра или подорванная/ошибочная
+                // мина; CLOSED, FLAGGED, QUESTION и ACTIVE игрок не видит.
+                if ((s >= CellState::OPENED_8 && s <= CellState::OPENED_0)
+                    || s == CellState::MINE_CLICKED
+                    || s == CellState::MINE_WRONG
+                    || s == CellState::MINE_EXPLODED)
+                    return true;   // в реальности уже первый чанк даёт ответ
+            }
+        }
+    }
+    return false;
+}
+
+bool WorldManager::findSafeStartCell(int64_t cx, int64_t cy, int64_t &sx, int64_t &sy) const {
+    // Безопасна клетка, у которой весь квадрат 3x3 свободен от мин: тогда
+    // первый клик точно её откроет, а не подорвёт. isMine — чистая хеш-функция,
+    // блокировка не нужна.
+    auto safe = [this](int64_t x, int64_t y) {
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx)
+                if (isMine(x + dx, y + dy))
+                    return false;
+        return true;
+    };
+
+    if (safe(cx, cy)) {
+        sx = cx;
+        sy = cy;
+        return true;
+    }
+
+    for (int64_t r = 1; r <= MAX_START_SEARCH_RADIUS; ++r) {
+        // Обходим границу кольца Чебышёва: все её клетки равноудалены от центра,
+        // поэтому порядок внутри кольца не важен. Углы посещаются дважды — так
+        // проще, чем дедуплицировать.
+        for (int64_t d = -r; d <= r; ++d) {
+            if (safe(cx + d, cy - r)) { sx = cx + d; sy = cy - r; return true; }
+            if (safe(cx + d, cy + r)) { sx = cx + d; sy = cy + r; return true; }
+            if (safe(cx - r, cy + d)) { sx = cx - r; sy = cy + d; return true; }
+            if (safe(cx + r, cy + d)) { sx = cx + r; sy = cy + d; return true; }
+        }
+    }
+    // На практике недостижимо: при плотности до 30% подходящих клеток хватает
+    // уже в первых кольцах.
+    return false;
+}
+
 std::shared_ptr<Chunk> WorldManager::getOrCreateChunk(int64_t cx, int64_t cy) {
     ChunkCoord coord{cx, cy};
     auto it = m_chunks.find(coord);
@@ -390,5 +451,8 @@ void WorldManager::evictIfNeeded() {
         }
         if (!found) return;                       // все чанки грязные
         m_chunks.remove(oldest);
+        // Вытесненный чанк выпадает из видимости (клетки читаются как CLOSED),
+        // то есть это тоже изменение поля для тумана.
+        bumpFieldRevision();
     }
 }

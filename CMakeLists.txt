@@ -54,6 +54,7 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         settings.h settings.cpp
         world.h world.cpp
         minefieldwidget.h minefieldwidget.cpp
+        fogofwar.h fogofwar.cpp
         ${RESOURCES}
         counterwidget.h counterwidget.cpp
     )

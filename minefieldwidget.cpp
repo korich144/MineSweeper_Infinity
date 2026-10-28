@@ -1,5 +1,6 @@
 #include "minefieldwidget.h"
 #include "worldmanager.h"
+#include "theme.h"
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -12,6 +13,12 @@ MinefieldWidget::MinefieldWidget(QWidget *parent)
     setFocusPolicy(Qt::StrongFocus);
     m_offset = QPointF(0, 0);
     m_clickTimer.start();
+}
+
+void MinefieldWidget::setWorldManager(WorldManager *wm) {
+    m_wm = wm;
+    // Посчитанный туман принадлежит прошлому миру и его ревизии.
+    m_fog.setWorldManager(wm);
 }
 
 void MinefieldWidget::setTheme(const QString &themeName) {
@@ -29,6 +36,9 @@ void MinefieldWidget::setTheme(const QString &themeName) {
     for (int i = 0; i < 16; ++i) {
         m_cellSprites.append(sheet.copy(i * 16, 0, 16, 16));
     }
+
+    // Клетки в тумане смешиваются с его цветом один раз на тему, а не на кадр.
+    m_fog.setTheme(m_cellSprites, ThemePalette::fromSheet(sheet).fog);
     update();
 }
 
@@ -42,11 +52,22 @@ void MinefieldWidget::setOffset(int64_t x, int64_t y) {
     update();
 }
 
+void MinefieldWidget::setStartIllumination(bool on) {
+    if (m_illumination == on) return;
+    m_illumination = on;
+    update();
+}
+
 void MinefieldWidget::centerOn(double x, double y) {
     QPointF center = rect().center();
     QPointF cellScreen = cellToScreen(x, y);
     m_offset += (center - cellScreen);
     update();
+}
+
+void MinefieldWidget::shiftByCells(int64_t dx, int64_t dy) {
+    const double cell = 16 * m_scale;
+    m_offset += QPointF(dx * cell, dy * cell);
 }
 
 void MinefieldWidget::paintEvent(QPaintEvent *) {
@@ -62,6 +83,39 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
     int64_t minY = static_cast<int64_t>(qFloor(topLeft.y())) - 1;
     int64_t maxX = static_cast<int64_t>(qCeil(bottomRight.x())) + 1;
     int64_t maxY = static_cast<int64_t>(qCeil(bottomRight.y())) + 1;
+
+    m_fog.update(minX, minY, maxX, maxY);
+
+    // Клетки 4-й стадии — сплошной цвет тумана, поэтому всё поле заливается
+    // им сразу, а сами клетки в цикле пропускаются.
+    p.fillRect(rect(), m_fog.color());
+
+    const QPair<int64_t, int64_t> illum = illuminationCell();
+    const int64_t illumX = illum.first;
+    const int64_t illumY = illum.second;
+
+    auto drawCell = [&](int64_t cellX, int64_t cellY, CellState st) {
+        const int stage = cellFogStage(cellX, cellY, illumX, illumY);
+        if (stage >= FogMap::TRANSITION_STAGES) return;   // уже залито туманом
+
+        QPointF sp = cellToScreen(cellX, cellY);
+        QRectF targetRect(sp, QSizeF(16 * m_scale, 16 * m_scale));
+        const QPixmap &sprite = (stage == 0)
+            ? m_cellSprites[static_cast<int>(st)]
+            : m_fog.sprite(st, stage);
+
+        bool pressed = m_pressedCell.has_value() &&
+                       m_pressedCell->first == cellX && m_pressedCell->second == cellY;
+        if (pressed && st == CellState::CLOSED) {
+            QPixmap tinted = sprite;
+            QPainter pixp(&tinted);
+            pixp.fillRect(tinted.rect(), QColor(0, 0, 0, 64));
+            pixp.end();
+            p.drawPixmap(targetRect, tinted, QRectF(0,0,16,16));
+        } else {
+            p.drawPixmap(targetRect, sprite, QRectF(0,0,16,16));
+        }
+    };
 
     const int64_t visMinCX = minX >> 4;
     const int64_t visMinCY = minY >> 4;
@@ -85,9 +139,7 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
                         int64_t cellX = (cx << 4) + i;
                         int64_t cellY = (cy << 4) + j;
                         if (cellX < minX || cellX > maxX || cellY < minY || cellY > maxY) continue;
-                        QPointF sp = cellToScreen(cellX, cellY);
-                        QRectF targetRect(sp, QSizeF(16 * m_scale, 16 * m_scale));
-                        p.drawPixmap(targetRect, m_cellSprites[static_cast<int>(CellState::CLOSED)], QRectF(0,0,16,16));
+                        drawCell(cellX, cellY, CellState::CLOSED);
                     }
                 }
             } else {
@@ -98,21 +150,7 @@ void MinefieldWidget::paintEvent(QPaintEvent *) {
                         int64_t cellX = (cx << 4) + i;
                         int64_t cellY = (cy << 4) + j;
                         if (cellX < minX || cellX > maxX || cellY < minY || cellY > maxY) continue;
-                        CellState st = chunk->cells[i][j];
-                        QPointF sp = cellToScreen(cellX, cellY);
-                        QRectF targetRect(sp, QSizeF(16 * m_scale, 16 * m_scale));
-
-                        bool pressed = m_pressedCell.has_value() &&
-                                       m_pressedCell->first == cellX && m_pressedCell->second == cellY;
-                        if (pressed && st == CellState::CLOSED) {
-                            QPixmap tinted = m_cellSprites[static_cast<int>(CellState::CLOSED)];
-                            QPainter pixp(&tinted);
-                            pixp.fillRect(tinted.rect(), QColor(0, 0, 0, 64));
-                            pixp.end();
-                            p.drawPixmap(targetRect, tinted, QRectF(0,0,16,16));
-                        } else {
-                            p.drawPixmap(targetRect, m_cellSprites[static_cast<int>(st)], QRectF(0,0,16,16));
-                        }
+                        drawCell(cellX, cellY, chunk->cells[i][j]);
                     }
                 }
             }
@@ -130,6 +168,30 @@ QPointF MinefieldWidget::screenToCell(const QPointF &pos) const {
                    (pos.y() - m_offset.y()) / (16 * m_scale));
 }
 
+QPair<int64_t, int64_t> MinefieldWidget::illuminationCell() const {
+    const QPointF center = screenToCell(QPointF(rect().center()));
+    return QPair<int64_t, int64_t>(static_cast<int64_t>(qFloor(center.x())),
+                                   static_cast<int64_t>(qFloor(center.y())));
+}
+
+int MinefieldWidget::cellFogStage(int64_t x, int64_t y, int64_t illumX, int64_t illumY) const {
+    const int stage = m_fog.stageAt(x, y);
+    if (stage == 0 || !m_illumination) return stage;
+
+    // Подсветка центра — та же открытая клетка, только не в мире, а на экране.
+    const int64_t d = qMax(qAbs(x - illumX), qAbs(y - illumY));
+    if (d > FogMap::CLEAR_RADIUS + FogMap::TRANSITION_STAGES) return stage;
+    const int lit = static_cast<int>(d) <= FogMap::CLEAR_RADIUS
+        ? 0
+        : static_cast<int>(d) - FogMap::CLEAR_RADIUS;
+    return qMin(stage, lit);
+}
+
+bool MinefieldWidget::isCellClickable(int64_t x, int64_t y) const {
+    const QPair<int64_t, int64_t> illum = illuminationCell();
+    return cellFogStage(x, y, illum.first, illum.second) <= FogMap::LAST_CLICKABLE_STAGE;
+}
+
 void MinefieldWidget::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton) {
         m_mightDrag = false;
@@ -138,13 +200,17 @@ void MinefieldWidget::mousePressEvent(QMouseEvent *event) {
         QPointF cell = screenToCell(event->pos());
         int64_t cx = static_cast<int64_t>(qFloor(cell.x()));
         int64_t cy = static_cast<int64_t>(qFloor(cell.y()));
-        m_pressedCell = QPair<int64_t, int64_t>(cx, cy);
+        if (isCellClickable(cx, cy))
+            m_pressedCell = QPair<int64_t, int64_t>(cx, cy);
+        else
+            m_pressedCell = std::nullopt;
         update();
     } else if (event->button() == Qt::RightButton) {
         if (!m_wm || !m_wm->isGameActive()) return;
         QPointF cell = screenToCell(event->pos());
         int64_t cx = static_cast<int64_t>(qFloor(cell.x()));
         int64_t cy = static_cast<int64_t>(qFloor(cell.y()));
+        if (!isCellClickable(cx, cy)) return;
         CellState st = m_wm->cellStateAt(cx, cy);
         if (st == CellState::CLOSED) {
             m_wm->setCellState(cx, cy, CellState::FLAGGED);
@@ -175,12 +241,28 @@ void MinefieldWidget::mouseReleaseEvent(QMouseEvent *event) {
             QPointF cell = screenToCell(event->pos());
             int64_t cx = static_cast<int64_t>(qFloor(cell.x()));
             int64_t cy = static_cast<int64_t>(qFloor(cell.y()));
+            if (!isCellClickable(cx, cy)) return;
             CellState st = m_wm->cellStateAt(cx, cy);
             if (st == CellState::CLOSED) {
-                bool ok = m_wm->revealCell(cx, cy);
+                int64_t rx = cx;
+                int64_t ry = cy;
+                // Первый клик: под курсор подводится заведомо безопасная клетка,
+                // чтобы игра всегда начиналась с открытой области. Сдвиг идёт
+                // на целое число клеток, поэтому подмена поля незаметна.
+                if (m_illumination) {
+                    int64_t sx = cx;
+                    int64_t sy = cy;
+                    if (m_wm->findSafeStartCell(cx, cy, sx, sy)) {
+                        shiftByCells(cx - sx, cy - sy);
+                        rx = sx;
+                        ry = sy;
+                    }
+                }
+
+                bool ok = m_wm->revealCell(rx, ry);
                 if (ok) {
                     emit firstClick();
-                    emit startReveal(cx, cy);
+                    emit startReveal(rx, ry);
                 }
                 update();
             }

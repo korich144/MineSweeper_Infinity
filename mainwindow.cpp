@@ -361,6 +361,7 @@ void MainWindow::initNewWorld(const QString &seed, int difficulty) {
     m_elapsedOffset = 0;
     m_score = 0;
     m_gameTimer.invalidate();
+    updateStartIllumination();
 
     // новый мир всегда открывается в начале координат, прижатым к левому
     // верхнему углу поля
@@ -411,6 +412,7 @@ void MainWindow::loadWorld(const QString &worldPath) {
     m_restoreCellX = info.lastViewX;
     m_restoreCellY = info.lastViewY;
     m_restoreAlignsToOrigin = false;
+    updateStartIllumination();
     scheduleCameraRestore();
 }
 
@@ -480,6 +482,17 @@ void MainWindow::onFirstClick() {
         m_gameStarted = true;
         m_gameTimer.start();
     }
+    // Первый клик уже открыл клетку — подсветка центра больше не нужна.
+    if (m_field) m_field->setStartIllumination(false);
+}
+
+// Пока в мире нет ни одной открытой клетки, туман закрывает всё поле и
+// кликнуть было бы некуда, поэтому центр экрана подсвечивается. Заодно это
+// признак «игра ещё не начиналась»: по нему первый клик подводит под курсор
+// заведомо безопасную клетку.
+void MainWindow::updateStartIllumination() {
+    if (!m_field) return;
+    m_field->setStartIllumination(!m_gameStarted && m_wm && !m_wm->hasOpenedCells());
 }
 
 void MainWindow::updateCounters() {

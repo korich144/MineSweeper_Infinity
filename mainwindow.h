@@ -83,6 +83,7 @@ private:
     void adjustWindowSizeForStatusBar(bool show);
     void scheduleCameraRestore();          // восстановление камеры после перезагрузки мира
     void applyDefaultWindowSize();         // первый запуск: окно ровно под 9x9 клеток
+    void updateStartIllumination();        // подсветка центра, пока не открыта ни одна клетка
     int  panelDifficulty(int fallback) const;  // сложность из панели или запасное значение
     QIcon loadCloseIcon() const;
 

@@ -67,6 +67,8 @@ set(PROJECT_SOURCES
 
         ${MSI_SRC}/minefieldwidget.cpp
         ${MSI_SRC}/minefieldwidget.h
+        ${MSI_SRC}/fogofwar.cpp
+        ${MSI_SRC}/fogofwar.h
 
         ${MSI_SRC}/world.cpp
         ${MSI_SRC}/world.h

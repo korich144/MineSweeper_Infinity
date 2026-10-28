@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QReadWriteLock>
 #include <QList>
+#include <atomic>
 #include <memory>
 #include <set>
 #include <vector>
@@ -118,6 +119,27 @@ public:
 
     void countStats(int &opened, int &flagged) const;
 
+    // --- Туман и старт игры ---------------------------------------------
+
+    // Ревизия поля: растёт при любом изменении клеток, загрузке и вытеснении
+    // чанков. Отрисовка тумана считает видимую область заново только тогда,
+    // когда ревизия изменилась.
+    uint64_t fieldRevision() const { return m_fieldRevision.load(std::memory_order_relaxed); }
+
+    // Отмечает запись клетки, сделанную в обход менеджера: решатель пишет
+    // в чанк напрямую, поэтому о его записях надо сообщать отдельно.
+    void noteCellWritten() { m_fieldRevision.fetch_add(1, std::memory_order_relaxed); }
+
+    // Есть ли в мире хотя бы одна показанная клетка. Нужно, чтобы решить,
+    // подсвечивать ли центр экрана до старта игры.
+    bool hasOpenedCells() const;
+
+    // Ищет ближайшую к (cx, cy) клетку, вокруг которой квадрат 3x3 свободен
+    // от мин: после первого клика поле сдвигается так, чтобы она оказалась
+    // под курсором. Обход идёт квадратными кольцами Чебышёва от центра.
+    static constexpr int MAX_START_SEARCH_RADIUS = 1024;
+    bool findSafeStartCell(int64_t cx, int64_t cy, int64_t &sx, int64_t &sy) const;
+
     bool isGameActive() const { return m_gameActive; }
     void setGameActive(bool active) { m_gameActive = active; }
 
@@ -160,6 +182,10 @@ private:
     double m_mineProbability = 0.0;
     uint64_t m_mineChanceNumerator = 0;
     bool m_gameActive = true;
+
+    // Счётчик изменений поля для отрисовки тумана (см. fieldRevision).
+    std::atomic<uint64_t> m_fieldRevision{0};
+    void bumpFieldRevision() { m_fieldRevision.fetch_add(1, std::memory_order_relaxed); }
 
     uint64_t m_hash = 0;
     void computeHash();
