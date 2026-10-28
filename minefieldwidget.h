@@ -56,6 +56,11 @@ private:
     // чтобы при прокрутке не было пустых полос.
     static constexpr int PRELOAD_CHUNKS = 3;
 
+    // Сколько миллисекунд после «дробного» шага прокрутка считается тачпадной:
+    // переживает случайный кратный 120 шаг внутри жеста, но колесо мыши,
+    // шлющее только кратные значения, это окно не открывает.
+    static constexpr qint64 HIGH_RES_SCROLL_WINDOW_MS = 1000;
+
     QPointF cellToScreen(double cx, double cy) const;
 
     // Клетка, которая сейчас подсвечивает центр экрана.
@@ -82,8 +87,13 @@ private:
     QPointF m_dragStartPos;
     QPointF m_dragStartOffset;
     QElapsedTimer m_clickTimer;
+    QElapsedTimer m_scrollClock;       // окно «тачпадного» колеса прокрутки
     QPointF m_clickPos;
     bool m_mightDrag = false;
+
+    // До какого момента (по m_scrollClock) прокрутка считается тачпадной.
+    // Windows не отличает тачпад от колеса мыши, кроме как по дробности дельты.
+    qint64 m_highResScrollUntil = 0;
 
     std::optional<QPair<int64_t, int64_t>> m_pressedCell;
 };

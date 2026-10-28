@@ -13,6 +13,7 @@ MinefieldWidget::MinefieldWidget(QWidget *parent)
     setFocusPolicy(Qt::StrongFocus);
     m_offset = QPointF(0, 0);
     m_clickTimer.start();
+    m_scrollClock.start();
 }
 
 void MinefieldWidget::setWorldManager(WorldManager *wm) {
@@ -339,19 +340,31 @@ void MinefieldWidget::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void MinefieldWidget::wheelEvent(QWheelEvent *event) {
-    // Колесо мыши даёт только угловую дельту (шаги по 120), прецизионный
-    // тачпад — ещё и пиксельную. По ней их и различаем: двумя пальцами поле
-    // двигается в любую сторону, колесом — меняется масштаб. Ctrl оставлен
-    // за масштабом: им же к нам приходят и щипки тачпада.
-    const QPoint pixelDelta = event->pixelDelta();
-    const bool touchpadScroll = !pixelDelta.isNull() || event->phase() != Qt::NoScrollPhase;
+    // На Windows Qt не отличает тачпад от колеса мыши: плагин платформы не
+    // умеет DirectManipulation, и прокрутка тачпада приходит теми же
+    // сообщениями, что и колесо, — без пиксельной дельты и без фаз жеста.
+    // Другие платформы отдают жест честно, а на Windows остаётся один
+    // признак — дробность дельты: колесо мыши всегда кратно 120 (зубец),
+    // тачпад шлёт поток мелких значений. Кратный 120 шаг внутри жеста
+    // переживается открытым окном, а колесо мыши его не открывает.
+    const QPoint angle = event->angleDelta();
+    const qint64 now = m_scrollClock.elapsed();
+    if (angle.x() % 120 != 0 || angle.y() % 120 != 0)
+        m_highResScrollUntil = now + HIGH_RES_SCROLL_WINDOW_MS;
 
+    const bool touchpadScroll = !event->pixelDelta().isNull()
+                             || event->phase() != Qt::NoScrollPhase
+                             || now < m_highResScrollUntil;
+
+    // Ctrl оставлен за масштабом: им же приходят и щипки тачпада.
     if (touchpadScroll && !(event->modifiers() & Qt::ControlModifier)) {
         // Как в обычном списке: прокрутка вниз показывает то, что ниже, то есть
         // поле уезжает вверх. Естественная прокрутка («палец — за контентом»)
         // учитывается системой сама. Инерция после отпускания пальцев идёт
-        // теми же событиями с фазой ScrollMomentum и попадает сюда же.
-        m_offset -= QPointF(pixelDelta);
+        // теми же событиями и попадает сюда же.
+        m_offset -= event->pixelDelta().isNull()
+            ? QPointF(angle)               // Windows: единица дельты ≈ пиксель
+            : QPointF(event->pixelDelta());
         update();
         return;
     }
